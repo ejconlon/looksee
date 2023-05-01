@@ -1,0 +1,3 @@
+# lookahead
+
+parser with lookahead
