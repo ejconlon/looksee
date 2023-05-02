@@ -485,15 +485,16 @@ arithParser = rootP
   digitP = altP "digit" (fmap (\i -> let j = T.pack (show i) in (j, i <$ expectP j)) [0 .. 9])
   identP = takeWhile1P isAlpha
   numP = foldl' addDigit 0 <$> greedy1P digitP
-  binaryP f op = uncurry f <$> infixP op rootP rootP
+  binaryP op f = uncurry f <$> infixP op rootP rootP
+  unaryP op f = expectP op *> fmap f rootP
   rawRootP =
     altP
       "root"
-      [ ("add", binaryP ArithAdd "+")
-      , ("sub", binaryP ArithSub "-")
-      , ("mul", binaryP ArithMul "*")
-      , -- , ("neg", _)
-        ("paren", betweenP (expectP "(") (expectP ")") rootP)
+      [ ("add", binaryP "+" ArithAdd)
+      , ("sub", binaryP "-" ArithSub)
+      , ("mul", binaryP "*" ArithMul)
+      , ("neg", unaryP "-" ArithNeg)
+      , ("paren", betweenP (expectP "(") (expectP ")") rootP)
       , ("num", ArithNum <$> numP)
       , ("var", ArithVar <$> identP)
       ]
