@@ -23,6 +23,7 @@ dependencies:
 - bifunctors
 - recursion-schemes
 - errata
+- vector
 
 default-extensions:
 - BangPatterns

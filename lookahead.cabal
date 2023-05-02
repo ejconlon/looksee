@@ -65,6 +65,7 @@ library
     , mtl
     , recursion-schemes
     , text
+    , vector
   default-language: GHC2021
 
 test-suite lookahead-test
@@ -111,4 +112,5 @@ test-suite lookahead-test
     , tasty
     , tasty-hunit
     , text
+    , vector
   default-language: GHC2021

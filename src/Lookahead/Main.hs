@@ -15,6 +15,7 @@ module Lookahead.Main
   , Parser
   , parseT
   , parse
+  , parseI
   , throwP
   , mapErrorP
   , endP
@@ -31,6 +32,10 @@ module Lookahead.Main
   , dropWhileP
   , betweenP
   , sepByP
+  , HasErrMessage (..)
+  , errataE
+  , renderE
+  , printE
   , Value
   , jsonParser
   )
@@ -56,13 +61,29 @@ import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
 import Data.Sequence (Seq (..))
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.IO qualified as TIO
+import Data.Text.Lazy qualified as TL
 import Data.Typeable (Typeable)
+import Data.Vector (Vector)
+import Data.Vector qualified as V
 import Data.Void (Void, absurd)
-import System.IO (stderr)
 import Errata qualified as E
+import Errata.Styles qualified as E
+import Errata.Types qualified as E
+import System.IO (stderr)
 
 modifyError :: Monad m => (e -> x) -> ExceptT e m a -> ExceptT x m a
 modifyError f m = lift (runExceptT m) >>= either (throwError . f) pure
+
+type OffsetVec = Vector (Int, Int)
+
+mkOffsetVec :: Text -> OffsetVec
+mkOffsetVec t = V.unfoldrN (T.length t) go ((0, 0), T.unpack t)
+ where
+  go (p@(!line, !col), xs) =
+    case xs of
+      [] -> Nothing
+      x : xs' -> Just (p, if x == '\n' then ((line + 1, 0), xs') else ((line, col + 1), xs'))
 
 data Range = Range {rangeStart :: !Int, rangeEnd :: !Int}
   deriving stock (Eq, Ord, Show)
@@ -139,7 +160,7 @@ errReason = efReason . unErr
 newtype ParserT e m a = ParserT {unP :: ExceptT (Err e) (StateT St m) a}
   deriving newtype (Functor, Applicative, Monad)
 
-type Parser = ParserT Void Identity
+type Parser e = ParserT e Identity
 
 instance Monad m => MonadFail (ParserT e m) where
   fail = errP . ReasonFail . T.pack
@@ -178,8 +199,14 @@ leftoverP = do
 parseT :: Monad m => ParserT e m a -> Text -> m (Either (Err e) a)
 parseT p h = fmap fst (runParserT (p <* endP) (St h (range h) Empty))
 
-parse :: Parser a -> Text -> Either (Err Void) a
+parse :: Parser e a -> Text -> Either (Err e) a
 parse p h = runIdentity (parseT p h)
+
+parseI :: HasErrMessage e => Parser e a -> Text -> IO (Maybe a)
+parseI p h =
+  case parse p h of
+    Left e -> Nothing <$ printE "<interactive>" h e
+    Right a -> pure (Just a)
 
 throwP :: Monad m => e -> ParserT e m a
 throwP = errP . ReasonCustom
@@ -357,42 +384,44 @@ instance HasErrMessage Void where
 instance HasErrMessage e => HasErrMessage (Reason e r) where
   getErrMessage = \case
     ReasonCustom e -> getErrMessage e
-    ReasonExpect _ _ -> undefined
-    ReasonDemand _ _ -> undefined
-    ReasonLeftover _ -> undefined
-    ReasonAlt _ _ -> undefined
-    ReasonInfix _ _ -> undefined
-    ReasonEmptyInfix -> undefined
-    ReasonFail _ -> undefined
+    ReasonExpect expected actual -> "Expected string: '" <> expected <> "' but found: '" <> actual <> "'"
+    ReasonDemand expected actual -> "Expected num chars: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)
+    ReasonLeftover count -> "Expected end but had leftover: " <> T.pack (show count)
+    ReasonAlt name _errs -> "Alternatives failed: " <> name
+    ReasonInfix op _errs -> "Infix operator failed: " <> op
+    ReasonEmptyInfix -> "Empty infix operator"
+    ReasonFail msg -> "User reported failure: " <> msg
 
 instance HasErrMessage e => HasErrMessage (Err e) where
   getErrMessage = getErrMessage . errReason
 
--- reportE :: HasErrMessage e => (Int -> D.Position) -> Err e -> D.Report Text
--- reportE mkP (Err (ErrF (Range s _) re)) =
---   let msg = getErrMessage re
---       pos = mkP s
---   in  D.Err Nothing msg [(pos, D.This "^")] []
+errataE :: HasErrMessage e => FilePath -> (Int -> (E.Line, E.Column)) -> Err e -> [E.Errata]
+errataE fp mkP e =
+  let (line, col) = mkP (rangeStart (errRange e))
+      msg = getErrMessage e
+      block = E.blockSimple E.basicStyle E.basicPointer fp Nothing (line, col, col, Nothing) (Just msg)
+  in  [E.Errata Nothing [block] Nothing]
 
--- diagnoseE :: HasErrMessage e => FilePath -> Text -> Err e -> D.Diagnostic Text
--- diagnoseE fp h e =
---   let mkP = undefined
---       rep = reportE mkP e
---   in D.addReport (D.addFile D.def fp (T.unpack h)) rep
+renderE :: HasErrMessage e => FilePath -> Text -> Err e -> Text
+renderE fp h e =
+  let ov = mkOffsetVec h
+      mkP i = let (!l, !c) = ov V.! i in (l + 1, c + 1)
+  in  TL.toStrict (E.prettyErrors h (errataE fp mkP e))
 
--- printE :: HasErrMessage e => FilePath -> Text -> Err e -> IO ()
--- printE fp h e = D.printDiagnostic stderr True True 2 D.defaultStyle (diagnoseE fp h e)
+printE :: HasErrMessage e => FilePath -> Text -> Err e -> IO ()
+printE fp h e = TIO.hPutStrLn stderr (renderE fp h e)
 
 data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObject !(Seq (Text, Value))
   deriving stock (Eq, Ord, Show)
 
-jsonParser :: Parser Value
+jsonParser :: Parser Void Value
 jsonParser = valP
  where
   spaceP = void (dropWhileP isSpace)
   valP = spaceP *> rawValP <* spaceP
   rawValP =
-    altP "value"
+    altP
+      "value"
       [ ("null", nullP)
       , ("str", strP)
       , ("array", arrayP)
