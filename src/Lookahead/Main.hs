@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Lookahead.Main
   ( Range (..)
@@ -7,7 +8,8 @@ module Lookahead.Main
   , Err (..)
   , Reason (..)
   , Side (..)
-  , P
+  , ParserT
+  , Parser
   , parse
   , throwP
   , mapErrorP
@@ -27,28 +29,35 @@ module Lookahead.Main
   , sepByP
   , Value
   , jsonParser
-  ) where
+  )
+where
 
 import Control.Applicative (liftA2)
-import Control.Monad (void)
-import Data.Text (Text)
-import qualified Data.Text as T
-import Data.Foldable (toList)
 import Control.Exception (Exception)
-import Control.Monad.State (State, MonadState (..), runState, gets)
+import Control.Monad (void)
 import Control.Monad.Except (ExceptT (..), MonadError (..), runExceptT)
-import Data.Sequence (Seq (..))
+import Control.Monad.IO.Class (MonadIO (..))
+import Control.Monad.Identity (Identity (..))
+import Control.Monad.Reader (MonadReader)
+import Control.Monad.State.Strict (MonadState (..), StateT (..), gets)
+import Control.Monad.Trans (MonadTrans (..))
+import Control.Monad.Writer.Strict (MonadWriter)
+import Data.Bifoldable (Bifoldable (..))
+import Data.Bifunctor (Bifunctor (..))
+import Data.Bifunctor.TH (deriveBifoldable, deriveBifunctor, deriveBitraversable)
+import Data.Bitraversable (Bitraversable (..))
 import Data.Char (isSpace)
+import Data.Foldable (toList)
+import Data.Sequence (Seq (..))
+import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Typeable (Typeable)
 import Data.Void (Void)
-import Data.Bifunctor (Bifunctor (..))
-import Data.Bifunctor.TH (deriveBifunctor, deriveBifoldable, deriveBitraversable)
-import Control.Monad.Trans (lift)
 
 modifyError :: Monad m => (e -> x) -> ExceptT e m a -> ExceptT x m a
 modifyError f m = lift (runExceptT m) >>= either (throwError . f) pure
 
-data Range = Range { rangeStart :: !Int, rangeEnd :: !Int }
+data Range = Range {rangeStart :: !Int, rangeEnd :: !Int}
   deriving stock (Eq, Ord, Show)
 
 range :: Text -> Range
@@ -64,8 +73,8 @@ data St = St
 data Side = SideLeft | SideRight
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
-data Reason r e =
-    ReasonCustom !e
+data Reason r e
+  = ReasonCustom !e
   | ReasonExpect !Text !Text
   | ReasonDemand !Int !Int
   | ReasonLeftover !Int
@@ -86,184 +95,221 @@ data Err e = Err
   deriving stock (Eq, Ord, Show)
 
 instance Functor Err where
-  fmap f = go where
+  fmap f = go
+   where
     go (Err ra re) = Err ra (bimap go f re)
+
+instance Foldable Err where
+  foldr f = flip go
+   where
+    go (Err _ re) z = bifoldr go f z re
+
+instance Traversable Err where
+  traverse f = go
+   where
+    go (Err ra re) = fmap (Err ra) (bitraverse go f re)
 
 instance (Typeable e, Show e) => Exception (Err e)
 
-newtype P e a = P { unP :: ExceptT (Err e) (State St) a }
+newtype ParserT e m a = ParserT {unP :: ExceptT (Err e) (StateT St m) a}
   deriving newtype (Functor, Applicative, Monad)
 
-instance MonadFail (P e) where
+type Parser = ParserT Void Identity
+
+instance Monad m => MonadFail (ParserT e m) where
   fail = errP . ReasonFail . T.pack
+
+instance MonadTrans (ParserT e) where
+  lift = ParserT . lift . lift
+
+deriving instance MonadReader r m => MonadReader r (ParserT e m)
+
+deriving instance MonadWriter w m => MonadWriter w (ParserT e m)
+
+deriving instance MonadIO m => MonadIO (ParserT e m)
+
+instance MonadState s m => MonadState s (ParserT e m) where
+  get = lift get
+  put = lift . put
+  state = lift . state
 
 -- private
 
-runP :: P e a -> St -> (Either (Err e) a, St)
-runP p = runState (runExceptT (unP p))
+runParserT :: ParserT e m a -> St -> m (Either (Err e) a, St)
+runParserT p = runStateT (runExceptT (unP p))
 
-errP :: Reason (Err e) e -> P e a
+errP :: Monad m => Reason (Err e) e -> ParserT e m a
 errP re = do
-  ra <- P (gets stRange)
-  P (throwError (Err ra re))
+  ra <- ParserT (gets stRange)
+  ParserT (throwError (Err ra re))
 
-leftoverP :: P e Int
+leftoverP :: Monad m => ParserT e m Int
 leftoverP = do
-  Range s e <- P (gets stRange)
+  Range s e <- ParserT (gets stRange)
   return (e - s)
 
 -- public
 
-parse :: P e a -> Text -> Either (Err e) a
-parse p h = fst (runP (p <* endP) (St h (range h) Empty))
+parseT :: Monad m => ParserT e m a -> Text -> m (Either (Err e) a)
+parseT p h = fmap fst (runParserT (p <* endP) (St h (range h) Empty))
 
-throwP :: e -> P e a
+parse :: Parser a -> Text -> Either (Err Void) a
+parse p h = runIdentity (parseT p h)
+
+throwP :: Monad m => e -> ParserT e m a
 throwP = errP . ReasonCustom
 
-mapErrorP :: (e -> x) -> P e a -> P x a
-mapErrorP f p = P (modifyError (fmap f) (unP p))
+mapErrorP :: Monad m => (e -> x) -> ParserT e m a -> ParserT x m a
+mapErrorP f p = ParserT (modifyError (fmap f) (unP p))
 
-endP :: P e ()
+endP :: Monad m => ParserT e m ()
 endP = do
   l <- leftoverP
   if l == 0
     then pure ()
     else errP (ReasonLeftover l)
 
-optP :: P e a -> P e (Maybe a)
+optP :: Monad m => ParserT e m a -> ParserT e m (Maybe a)
 optP p = do
-  st0 <- P get
-  let (ea, st1) = runP p st0
+  st0 <- ParserT get
+  (ea, st1) <- lift (runParserT p st0)
   case ea of
     Left _ -> pure Nothing
-    Right a -> Just a <$ P (put st1)
+    Right a -> Just a <$ ParserT (put st1)
 
-altP :: Foldable f => f (Text, P e a) -> P e a
-altP = go . toList where
+altP :: Monad m => Foldable f => f (Text, ParserT e m a) -> ParserT e m a
+altP = go . toList
+ where
   go xps = do
-    st0 <- P get
+    st0 <- ParserT get
     goNext st0 Empty xps
   goNext st0 !errs = \case
     [] -> errP (ReasonAlt errs)
-    (x, p):xps' ->
-      let (ea, st1) = runP p st0
-      in case ea of
+    (x, p) : xps' -> do
+      (ea, st1) <- lift (runParserT p st0)
+      case ea of
         Left err -> goNext st0 (errs :|> (x, err)) xps'
-        Right a -> a <$ P (put st1)
+        Right a -> a <$ ParserT (put st1)
 
-greedyP :: P e a -> P e (Seq a)
-greedyP p = go Empty where
+greedyP :: Monad m => ParserT e m a -> ParserT e m (Seq a)
+greedyP p = go Empty
+ where
   go !acc = do
     ma <- optP p
     case ma of
       Nothing -> pure acc
       Just a -> go (acc :|> a)
 
-greedy1P :: P e a -> P e (Seq a)
+greedy1P :: Monad m => ParserT e m a -> ParserT e m (Seq a)
 greedy1P p = liftA2 (:<|) p (greedyP p)
 
-lookP :: P e a -> P e a
+lookP :: Monad m => ParserT e m a -> ParserT e m a
 lookP p = do
-  st0 <- P get
-  case fst (runP p st0) of
-    Left err -> P (throwError err)
+  st0 <- ParserT get
+  (ea, _) <- lift (runParserT p st0)
+  case ea of
+    Left err -> ParserT (throwError err)
     Right a -> pure a
 
-expectP :: Text -> P e ()
+expectP :: Monad m => Text -> ParserT e m ()
 expectP n = do
   o <- takeP (T.length n)
   if n == o
     then pure ()
     else errP (ReasonExpect n o)
 
-infixP :: Text -> P e a -> P e b -> P e (a, b)
-infixP n pa pb = go where
-  go = if T.null n
-    then errP ReasonEmptyInfix
-    else do
-      st0 <- P get
-      goNext st0 Empty (T.breakOnAll n (stHay st0))
+infixP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
+infixP n pa pb = go
+ where
+  go =
+    if T.null n
+      then errP ReasonEmptyInfix
+      else do
+        st0 <- ParserT get
+        goNext st0 Empty (T.breakOnAll n (stHay st0))
   goNext st0 !eacc = \case
     [] -> errP (ReasonInfix n eacc)
-    (h1, h2):rest -> do
+    (h1, h2) : rest -> do
       let r = stRange st0
           e1 = rangeStart r + T.length h1
-          st1 = st0 { stHay = h1, stRange = r { rangeEnd = e1 } }
-          st2 = st0 { stHay = h2, stRange = r { rangeStart = e1 + T.length n } }
-      case fst (runP (pa <* endP) st1) of
-        Left errA -> goNext st0 (eacc :|> (e1, SideLeft, errA)) rest
+          st1 = st0 {stHay = h1, stRange = r {rangeEnd = e1}}
+          st2 = st0 {stHay = h2, stRange = r {rangeStart = e1 + T.length n}}
+      (ea1, _) <- lift (runParserT (pa <* endP) st1)
+      case ea1 of
+        Left err1 -> goNext st0 (eacc :|> (e1, SideLeft, err1)) rest
         Right a -> do
-          let (ea2, st3) = runP pb st2
+          (ea2, st3) <- lift (runParserT pb st2)
           case ea2 of
-            Left errB -> goNext st0 (eacc :|> (e1, SideRight, errB)) rest
-            Right b -> (a, b) <$ P (put st3)
+            Left err2 -> goNext st0 (eacc :|> (e1, SideRight, err2)) rest
+            Right b -> (a, b) <$ ParserT (put st3)
 
-takeP :: Int -> P e Text
-takeP i = P $ state $ \st ->
+takeP :: Monad m => Int -> ParserT e m Text
+takeP i = ParserT $ state $ \st ->
   let h = stHay st
       (o, h') = T.splitAt i h
       l = T.length o
       r = stRange st
-      r' = r { rangeStart = rangeStart r + l }
-      st' = st { stHay = h', stRange = r' }
-  in (o, st')
+      r' = r {rangeStart = rangeStart r + l}
+      st' = st {stHay = h', stRange = r'}
+  in  (o, st')
 
-takeExactP :: Int -> P e Text
+takeExactP :: Monad m => Int -> ParserT e m Text
 takeExactP i = do
-  et <- P $ state $ \st ->
+  et <- ParserT $ state $ \st ->
     let h = stHay st
         (o, h') = T.splitAt i h
         l = T.length o
         r = stRange st
-        r' = r { rangeStart = rangeStart r + T.length o }
-        st' = st { stHay = h', stRange = r' }
-    in if l == i then (Right o, st') else (Left l, st)
+        r' = r {rangeStart = rangeStart r + T.length o}
+        st' = st {stHay = h', stRange = r'}
+    in  if l == i then (Right o, st') else (Left l, st)
   case et of
     Left l -> errP (ReasonDemand i l)
     Right a -> pure a
 
-dropP :: Int -> P e Int
+dropP :: Monad m => Int -> ParserT e m Int
 dropP = fmap T.length . takeP
 
-dropExactP :: Int -> P e ()
+dropExactP :: Monad m => Int -> ParserT e m ()
 dropExactP = void . takeExactP
 
-takeWhileP :: (Char -> Bool) -> P e Text
-takeWhileP f = P $ state $ \st ->
+takeWhileP :: Monad m => (Char -> Bool) -> ParserT e m Text
+takeWhileP f = ParserT $ state $ \st ->
   let h = stHay st
       o = T.takeWhile f h
       l = T.length o
       h' = T.drop l h
       r = stRange st
-      r' = r { rangeStart = rangeStart r + l }
-  in (o, st { stHay = h', stRange = r' })
+      r' = r {rangeStart = rangeStart r + l}
+  in  (o, st {stHay = h', stRange = r'})
 
-takeWhile1P :: (Char -> Bool) -> P e Text
+takeWhile1P :: Monad m => (Char -> Bool) -> ParserT e m Text
 takeWhile1P f = do
-  mt <- P $ state $ \st ->
+  mt <- ParserT $ state $ \st ->
     let h = stHay st
         o = T.takeWhile f h
         l = T.length o
         h' = T.drop l h
         r = stRange st
-        r' = r { rangeStart = rangeStart r + l }
-        st' = st { stHay = h', stRange = r' }
-    in if l > 0 then (Just o, st') else (Nothing, st)
+        r' = r {rangeStart = rangeStart r + l}
+        st' = st {stHay = h', stRange = r'}
+    in  if l > 0 then (Just o, st') else (Nothing, st)
   case mt of
     Nothing -> errP (ReasonDemand 1 0)
     Just a -> pure a
 
-dropWhileP :: (Char -> Bool) -> P e Int
+dropWhileP :: Monad m => (Char -> Bool) -> ParserT e m Int
 dropWhileP = fmap T.length . takeWhileP
 
-dropWhile1P :: (Char -> Bool) -> P e Int
+dropWhile1P :: Monad m => (Char -> Bool) -> ParserT e m Int
 dropWhile1P = fmap T.length . takeWhile1P
 
-betweenP :: P e x -> P e y -> P e a -> P e a
+betweenP :: Monad m => ParserT e m x -> ParserT e m y -> ParserT e m a -> ParserT e m a
 betweenP px py pa = px *> pa <* py
 
-sepByP :: P e x -> P e a -> P e (Seq a)
-sepByP c p = go where
+sepByP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+sepByP c p = go
+ where
   go = do
     ma <- optP p
     case ma of
@@ -280,16 +326,18 @@ sepByP c p = go where
 data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObject !(Seq (Text, Value))
   deriving stock (Eq, Ord, Show)
 
-jsonParser :: P Void Value
-jsonParser = valP where
+jsonParser :: Parser Value
+jsonParser = valP
+ where
   spaceP = void (dropWhileP isSpace)
   valP = spaceP *> rawValP <* spaceP
-  rawValP = altP
-    [ ("null", nullP)
-    , ("str", strP)
-    , ("array", arrayP)
-    , ("object", objectP)
-    ]
+  rawValP =
+    altP
+      [ ("null", nullP)
+      , ("str", strP)
+      , ("array", arrayP)
+      , ("object", objectP)
+      ]
   nullP = ValueNull <$ expectP "null"
   rawStrP = betweenP (expectP "\"") (expectP "\"") (takeWhileP (/= '"'))
   strP = ValueString <$> rawStrP
@@ -303,4 +351,3 @@ jsonParser = valP where
     pure (s, v)
   pairP = spaceP *> rawPairP <* spaceP
   objectP = ValueObject <$> betweenP (expectP "{") (expectP "}") (sepByP (expectP ",") pairP)
-
