@@ -5,11 +5,15 @@
 module Lookahead.Main
   ( Range (..)
   , range
-  , Err (..)
   , Reason (..)
+  , ErrF (..)
+  , Err (..)
+  , errRange
+  , errReason
   , Side (..)
   , ParserT
   , Parser
+  , parseT
   , parse
   , throwP
   , mapErrorP
@@ -48,11 +52,14 @@ import Data.Bifunctor.TH (deriveBifoldable, deriveBifunctor, deriveBitraversable
 import Data.Bitraversable (Bitraversable (..))
 import Data.Char (isSpace)
 import Data.Foldable (toList)
+import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
 import Data.Sequence (Seq (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Typeable (Typeable)
-import Data.Void (Void)
+import Data.Void (Void, absurd)
+import Error.Diagnose qualified as D
+import System.IO (stderr)
 
 modifyError :: Monad m => (e -> x) -> ExceptT e m a -> ExceptT x m a
 modifyError f m = lift (runExceptT m) >>= either (throwError . f) pure
@@ -73,7 +80,7 @@ data St = St
 data Side = SideLeft | SideRight
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
-data Reason r e
+data Reason e r
   = ReasonCustom !e
   | ReasonExpect !Text !Text
   | ReasonDemand !Int !Int
@@ -82,34 +89,52 @@ data Reason r e
   | ReasonInfix !Text !(Seq (Int, Side, r))
   | ReasonEmptyInfix
   | ReasonFail !Text
-  deriving stock (Eq, Ord, Show)
+  deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
 deriveBifunctor ''Reason
 deriveBifoldable ''Reason
 deriveBitraversable ''Reason
 
-data Err e = Err
-  { errRange :: !Range
-  , errReason :: !(Reason (Err e) e)
-  }
+data ErrF e r = ErrF {efRange :: !Range, efReason :: !(Reason e r)}
+  deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
+
+deriveBifunctor ''ErrF
+deriveBifoldable ''ErrF
+deriveBitraversable ''ErrF
+
+newtype Err e = Err {unErr :: ErrF e (Err e)}
   deriving stock (Eq, Ord, Show)
 
 instance Functor Err where
   fmap f = go
    where
-    go (Err ra re) = Err ra (bimap go f re)
+    go (Err (ErrF ra re)) = Err (ErrF ra (bimap f go re))
 
 instance Foldable Err where
   foldr f = flip go
    where
-    go (Err _ re) z = bifoldr go f z re
+    go (Err (ErrF _ re)) z = bifoldr f go z re
 
 instance Traversable Err where
   traverse f = go
    where
-    go (Err ra re) = fmap (Err ra) (bitraverse go f re)
+    go (Err (ErrF ra re)) = fmap (Err . ErrF ra) (bitraverse f go re)
 
 instance (Typeable e, Show e) => Exception (Err e)
+
+type instance Base (Err e) = ErrF e
+
+instance Recursive (Err e) where
+  project = unErr
+
+instance Corecursive (Err e) where
+  embed = Err
+
+errRange :: Err e -> Range
+errRange = efRange . unErr
+
+errReason :: Err e -> Reason e (Err e)
+errReason = efReason . unErr
 
 newtype ParserT e m a = ParserT {unP :: ExceptT (Err e) (StateT St m) a}
   deriving newtype (Functor, Applicative, Monad)
@@ -138,10 +163,10 @@ instance MonadState s m => MonadState s (ParserT e m) where
 runParserT :: ParserT e m a -> St -> m (Either (Err e) a, St)
 runParserT p = runStateT (runExceptT (unP p))
 
-errP :: Monad m => Reason (Err e) e -> ParserT e m a
+errP :: Monad m => Reason e (Err e) -> ParserT e m a
 errP re = do
   ra <- ParserT (gets stRange)
-  ParserT (throwError (Err ra re))
+  ParserT (throwError (Err (ErrF ra re)))
 
 leftoverP :: Monad m => ParserT e m Int
 leftoverP = do
@@ -322,6 +347,32 @@ sepByP c p = go
       Just _ -> do
         a <- p
         goNext (acc :|> a)
+
+class HasErrMessage e where
+  errMessage :: e -> Text
+
+instance HasErrMessage Void where
+  errMessage = absurd
+
+reportE :: HasErrMessage e => (Int -> D.Position) -> Err e -> D.Report Text
+reportE mkP (Err (ErrF (Range s _) re)) =
+  let msg = case re of
+        ReasonCustom e -> errMessage e
+        ReasonExpect _ _ -> undefined
+        ReasonDemand _ _ -> undefined
+        ReasonLeftover _ -> undefined
+        ReasonAlt _ -> undefined
+        ReasonInfix _ _ -> undefined
+        ReasonEmptyInfix -> undefined
+        ReasonFail _ -> undefined
+      pos = mkP s
+  in  D.Err Nothing msg [(pos, D.This "^")] []
+
+diagnoseE :: HasErrMessage e => FilePath -> Text -> Err e -> D.Diagnostic Text
+diagnoseE fp h e = undefined
+
+printE :: HasErrMessage e => FilePath -> Text -> Err e -> IO ()
+printE fp h e = D.printDiagnostic stderr True True 2 D.defaultStyle (diagnoseE fp h e)
 
 data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObject !(Seq (Text, Value))
   deriving stock (Eq, Ord, Show)

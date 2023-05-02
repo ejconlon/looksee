@@ -22,6 +22,7 @@ dependencies:
 - mtl
 - diagnose
 - bifunctors
+- recursion-schemes
 
 default-extensions:
 - BangPatterns
