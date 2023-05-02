@@ -61,7 +61,7 @@ library
       base >=4.12 && <5
     , bifunctors
     , containers
-    , diagnose
+    , errata
     , mtl
     , recursion-schemes
     , text
@@ -104,7 +104,7 @@ test-suite lookahead-test
       base >=4.12 && <5
     , bifunctors
     , containers
-    , diagnose
+    , errata
     , lookahead
     , mtl
     , recursion-schemes

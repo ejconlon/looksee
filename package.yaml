@@ -20,9 +20,9 @@ dependencies:
 - text
 - containers
 - mtl
-- diagnose
 - bifunctors
 - recursion-schemes
+- errata
 
 default-extensions:
 - BangPatterns

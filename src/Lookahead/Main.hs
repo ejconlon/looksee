@@ -58,8 +58,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Typeable (Typeable)
 import Data.Void (Void, absurd)
-import Error.Diagnose qualified as D
 import System.IO (stderr)
+import Errata qualified as E
 
 modifyError :: Monad m => (e -> x) -> ExceptT e m a -> ExceptT x m a
 modifyError f m = lift (runExceptT m) >>= either (throwError . f) pure
@@ -85,7 +85,7 @@ data Reason e r
   | ReasonExpect !Text !Text
   | ReasonDemand !Int !Int
   | ReasonLeftover !Int
-  | ReasonAlt !(Seq (Text, r))
+  | ReasonAlt !Text !(Seq (Text, r))
   | ReasonInfix !Text !(Seq (Int, Side, r))
   | ReasonEmptyInfix
   | ReasonFail !Text
@@ -202,14 +202,14 @@ optP p = do
     Left _ -> pure Nothing
     Right a -> Just a <$ ParserT (put st1)
 
-altP :: Monad m => Foldable f => f (Text, ParserT e m a) -> ParserT e m a
-altP = go . toList
+altP :: Monad m => Foldable f => Text -> f (Text, ParserT e m a) -> ParserT e m a
+altP lab = go . toList
  where
   go xps = do
     st0 <- ParserT get
     goNext st0 Empty xps
   goNext st0 !errs = \case
-    [] -> errP (ReasonAlt errs)
+    [] -> errP (ReasonAlt lab errs)
     (x, p) : xps' -> do
       (ea, st1) <- lift (runParserT p st0)
       case ea of
@@ -349,30 +349,39 @@ sepByP c p = go
         goNext (acc :|> a)
 
 class HasErrMessage e where
-  errMessage :: e -> Text
+  getErrMessage :: e -> Text
 
 instance HasErrMessage Void where
-  errMessage = absurd
+  getErrMessage = absurd
 
-reportE :: HasErrMessage e => (Int -> D.Position) -> Err e -> D.Report Text
-reportE mkP (Err (ErrF (Range s _) re)) =
-  let msg = case re of
-        ReasonCustom e -> errMessage e
-        ReasonExpect _ _ -> undefined
-        ReasonDemand _ _ -> undefined
-        ReasonLeftover _ -> undefined
-        ReasonAlt _ -> undefined
-        ReasonInfix _ _ -> undefined
-        ReasonEmptyInfix -> undefined
-        ReasonFail _ -> undefined
-      pos = mkP s
-  in  D.Err Nothing msg [(pos, D.This "^")] []
+instance HasErrMessage e => HasErrMessage (Reason e r) where
+  getErrMessage = \case
+    ReasonCustom e -> getErrMessage e
+    ReasonExpect _ _ -> undefined
+    ReasonDemand _ _ -> undefined
+    ReasonLeftover _ -> undefined
+    ReasonAlt _ _ -> undefined
+    ReasonInfix _ _ -> undefined
+    ReasonEmptyInfix -> undefined
+    ReasonFail _ -> undefined
 
-diagnoseE :: HasErrMessage e => FilePath -> Text -> Err e -> D.Diagnostic Text
-diagnoseE fp h e = undefined
+instance HasErrMessage e => HasErrMessage (Err e) where
+  getErrMessage = getErrMessage . errReason
 
-printE :: HasErrMessage e => FilePath -> Text -> Err e -> IO ()
-printE fp h e = D.printDiagnostic stderr True True 2 D.defaultStyle (diagnoseE fp h e)
+-- reportE :: HasErrMessage e => (Int -> D.Position) -> Err e -> D.Report Text
+-- reportE mkP (Err (ErrF (Range s _) re)) =
+--   let msg = getErrMessage re
+--       pos = mkP s
+--   in  D.Err Nothing msg [(pos, D.This "^")] []
+
+-- diagnoseE :: HasErrMessage e => FilePath -> Text -> Err e -> D.Diagnostic Text
+-- diagnoseE fp h e =
+--   let mkP = undefined
+--       rep = reportE mkP e
+--   in D.addReport (D.addFile D.def fp (T.unpack h)) rep
+
+-- printE :: HasErrMessage e => FilePath -> Text -> Err e -> IO ()
+-- printE fp h e = D.printDiagnostic stderr True True 2 D.defaultStyle (diagnoseE fp h e)
 
 data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObject !(Seq (Text, Value))
   deriving stock (Eq, Ord, Show)
@@ -383,7 +392,7 @@ jsonParser = valP
   spaceP = void (dropWhileP isSpace)
   valP = spaceP *> rawValP <* spaceP
   rawValP =
-    altP
+    altP "value"
       [ ("null", nullP)
       , ("str", strP)
       , ("array", arrayP)

@@ -1,4 +1,4 @@
-resolver: lts-20.17
+resolver: lts-20.19
 
 ghc-options:
   "$everything": -haddock
@@ -6,5 +6,3 @@ ghc-options:
 packages:
 - .
 
-extra-deps:
-- diagnose-2.4.0
