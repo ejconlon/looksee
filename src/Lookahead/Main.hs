@@ -25,6 +25,7 @@ module Lookahead.Main
   , greedy1P
   , lookP
   , expectP
+  -- , breakOnP
   , infixP
   , takeP
   , dropP
@@ -32,12 +33,15 @@ module Lookahead.Main
   , dropWhileP
   , betweenP
   , sepByP
+  , spaceP
   , HasErrMessage (..)
   , errataE
   , renderE
   , printE
-  , Value
+  , Value (..)
   , jsonParser
+  , Arith (..)
+  , arithParser
   )
 where
 
@@ -55,8 +59,8 @@ import Data.Bifoldable (Bifoldable (..))
 import Data.Bifunctor (Bifunctor (..))
 import Data.Bifunctor.TH (deriveBifoldable, deriveBifunctor, deriveBitraversable)
 import Data.Bitraversable (Bitraversable (..))
-import Data.Char (isSpace)
-import Data.Foldable (toList)
+import Data.Char (isAlpha, isSpace)
+import Data.Foldable (foldl', toList)
 import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
 import Data.Sequence (Seq (..))
 import Data.Text (Text)
@@ -108,7 +112,7 @@ data Reason e r
   | ReasonLeftover !Int
   | ReasonAlt !Text !(Seq (Text, r))
   | ReasonInfix !Text !(Seq (Int, Side, r))
-  | ReasonEmptyInfix
+  | ReasonEmptySearch
   | ReasonFail !Text
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
@@ -270,12 +274,20 @@ expectP n = do
     then pure ()
     else errP (ReasonExpect n o)
 
+-- breakOnP :: Monad m => Text -> ParserT e m a -> ParserT e m a
+-- breakOnP n p = go where
+--   go =
+--     if T.null n
+--       then errP ReasonEmptySearch
+--       else do
+--         undefined
+
 infixP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
 infixP n pa pb = go
  where
   go =
     if T.null n
-      then errP ReasonEmptyInfix
+      then errP ReasonEmptySearch
       else do
         st0 <- ParserT get
         goNext st0 Empty (T.breakOnAll n (stHay st0))
@@ -285,7 +297,8 @@ infixP n pa pb = go
       let r = stRange st0
           e1 = rangeStart r + T.length h1
           st1 = st0 {stHay = h1, stRange = r {rangeEnd = e1}}
-          st2 = st0 {stHay = h2, stRange = r {rangeStart = e1 + T.length n}}
+          l = T.length n
+          st2 = st0 {stHay = T.drop l h2, stRange = r {rangeStart = e1 + l}}
       (ea1, _) <- lift (runParserT (pa <* endP) st1)
       case ea1 of
         Left err1 -> goNext st0 (eacc :|> (e1, SideLeft, err1)) rest
@@ -375,37 +388,53 @@ sepByP c p = go
         a <- p
         goNext (acc :|> a)
 
+spaceP :: Monad m => ParserT e m ()
+spaceP = void (dropWhileP isSpace)
+
 class HasErrMessage e where
-  getErrMessage :: e -> Text
+  getErrMessage :: e -> [Text]
 
 instance HasErrMessage Void where
   getErrMessage = absurd
 
-instance HasErrMessage e => HasErrMessage (Reason e r) where
-  getErrMessage = \case
-    ReasonCustom e -> getErrMessage e
-    ReasonExpect expected actual -> "Expected string: '" <> expected <> "' but found: '" <> actual <> "'"
-    ReasonDemand expected actual -> "Expected num chars: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)
-    ReasonLeftover count -> "Expected end but had leftover: " <> T.pack (show count)
-    ReasonAlt name _errs -> "Alternatives failed: " <> name
-    ReasonInfix op _errs -> "Infix operator failed: " <> op
-    ReasonEmptyInfix -> "Empty infix operator"
-    ReasonFail msg -> "User reported failure: " <> msg
+indent :: Int -> [Text] -> [Text]
+indent i = let s = T.replicate (2 * i) " " in fmap (s <>)
 
 instance HasErrMessage e => HasErrMessage (Err e) where
-  getErrMessage = getErrMessage . errReason
+  getErrMessage (Err (ErrF _ re)) =
+    case re of
+      ReasonCustom e -> getErrMessage e
+      ReasonExpect expected actual -> ["Expected string: '" <> expected <> "' but found: '" <> actual <> "'"]
+      ReasonDemand expected actual -> ["Expected num chars: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)]
+      ReasonLeftover count -> ["Expected end but had leftover: " <> T.pack (show count)]
+      ReasonAlt name errs ->
+        let hd = "Alternatives failed: " <> name
+            tl = indent 1 $ do
+              (n, e) <- toList errs
+              let x = "Tried alternative: " <> n
+              x : indent 1 (getErrMessage e)
+        in  hd : tl
+      ReasonInfix op errs ->
+        let hd = "Infix operator failed: " <> op
+            tl = indent 1 $ do
+              (i, s, e) <- toList errs
+              let x = "Tried position: " <> T.pack (show i) <> " (" <> (if s == SideLeft then "left" else "right") <> ")"
+              x : indent 1 (getErrMessage e)
+        in  hd : tl
+      ReasonEmptySearch -> ["Empty string search"]
+      ReasonFail msg -> ["User reported failure: " <> msg]
 
 errataE :: HasErrMessage e => FilePath -> (Int -> (E.Line, E.Column)) -> Err e -> [E.Errata]
 errataE fp mkP e =
   let (line, col) = mkP (rangeStart (errRange e))
       msg = getErrMessage e
-      block = E.blockSimple E.basicStyle E.basicPointer fp Nothing (line, col, col, Nothing) (Just msg)
+      block = E.blockSimple E.basicStyle E.basicPointer fp Nothing (line, col, col, Nothing) (Just (T.unlines msg))
   in  [E.Errata Nothing [block] Nothing]
 
 renderE :: HasErrMessage e => FilePath -> Text -> Err e -> Text
 renderE fp h e =
   let ov = mkOffsetVec h
-      mkP i = let (!l, !c) = ov V.! i in (l + 1, c + 1)
+      mkP = if V.null ov then const (1, 1) else \i -> let (!l, !c) = ov V.! i in (l + 1, c + 1)
   in  TL.toStrict (E.prettyErrors h (errataE fp mkP e))
 
 printE :: HasErrMessage e => FilePath -> Text -> Err e -> IO ()
@@ -417,7 +446,6 @@ data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObje
 jsonParser :: Parser Void Value
 jsonParser = valP
  where
-  spaceP = void (dropWhileP isSpace)
   valP = spaceP *> rawValP <* spaceP
   rawValP =
     altP
@@ -440,3 +468,33 @@ jsonParser = valP
     pure (s, v)
   pairP = spaceP *> rawPairP <* spaceP
   objectP = ValueObject <$> betweenP (expectP "{") (expectP "}") (sepByP (expectP ",") pairP)
+
+data Arith
+  = ArithNum !Int
+  | ArithVar !Text
+  | ArithNeg Arith
+  | ArithMul Arith Arith
+  | ArithAdd Arith Arith
+  | ArithSub Arith Arith
+  deriving stock (Eq, Ord, Show)
+
+arithParser :: Parser Void Arith
+arithParser = rootP
+ where
+  addDigit n d = n * 10 + d
+  digitP = altP "digit" (fmap (\i -> let j = T.pack (show i) in (j, i <$ expectP j)) [0 .. 9])
+  identP = takeWhile1P isAlpha
+  numP = foldl' addDigit 0 <$> greedy1P digitP
+  binaryP f op = uncurry f <$> infixP op rootP rootP
+  rawRootP =
+    altP
+      "root"
+      [ ("add", binaryP ArithAdd "+")
+      , ("sub", binaryP ArithSub "-")
+      , ("mul", binaryP ArithMul "*")
+      , -- , ("neg", _)
+        ("paren", betweenP (expectP "(") (expectP ")") rootP)
+      , ("num", ArithNum <$> numP)
+      , ("var", ArithVar <$> identP)
+      ]
+  rootP = spaceP *> rawRootP <* spaceP
