@@ -5,3 +5,6 @@ ghc-options:
 
 packages:
 - .
+
+extra-deps:
+- diagnose-2.4.0
