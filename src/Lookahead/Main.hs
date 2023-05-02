@@ -16,6 +16,7 @@ module Lookahead.Main
   , altP
   , greedyP
   , greedy1P
+  , lookP
   , expectP
   , infixP
   , takeP
@@ -37,7 +38,6 @@ import Control.Exception (Exception)
 import Control.Monad.State (State, MonadState (..), runState, gets)
 import Control.Monad.Except (ExceptT (..), MonadError (..), runExceptT)
 import Data.Sequence (Seq (..))
--- import qualified Data.Sequence as Seq
 import Data.Char (isSpace)
 import Data.Typeable (Typeable)
 import Data.Void (Void)
@@ -67,10 +67,12 @@ data Side = SideLeft | SideRight
 data Reason r e =
     ReasonCustom !e
   | ReasonExpect !Text !Text
+  | ReasonDemand !Int !Int
   | ReasonLeftover !Int
   | ReasonAlt !(Seq (Text, r))
   | ReasonInfix !Text !(Seq (Int, Side, r))
   | ReasonEmptyInfix
+  | ReasonFail !Text
   deriving stock (Eq, Ord, Show)
 
 deriveBifunctor ''Reason
@@ -91,6 +93,9 @@ instance (Typeable e, Show e) => Exception (Err e)
 
 newtype P e a = P { unP :: ExceptT (Err e) (State St) a }
   deriving newtype (Functor, Applicative, Monad)
+
+instance MonadFail (P e) where
+  fail = errP . ReasonFail . T.pack
 
 -- private
 
@@ -157,6 +162,13 @@ greedyP p = go Empty where
 greedy1P :: P e a -> P e (Seq a)
 greedy1P p = liftA2 (:<|) p (greedyP p)
 
+lookP :: P e a -> P e a
+lookP p = do
+  st0 <- P get
+  case fst (runP p st0) of
+    Left err -> P (throwError err)
+    Right a -> pure a
+
 expectP :: Text -> P e ()
 expectP n = do
   o <- takeP (T.length n)
@@ -190,16 +202,31 @@ takeP :: Int -> P e Text
 takeP i = P $ state $ \st ->
   let h = stHay st
       (o, h') = T.splitAt i h
+      l = T.length o
       r = stRange st
-      r' = r { rangeStart = rangeStart r + T.length o }
-  in (o, st { stHay = h', stRange = r' })
+      r' = r { rangeStart = rangeStart r + l }
+      st' = st { stHay = h', stRange = r' }
+  in (o, st')
 
--- takeExactP :: Int -> P e Text
+takeExactP :: Int -> P e Text
+takeExactP i = do
+  et <- P $ state $ \st ->
+    let h = stHay st
+        (o, h') = T.splitAt i h
+        l = T.length o
+        r = stRange st
+        r' = r { rangeStart = rangeStart r + T.length o }
+        st' = st { stHay = h', stRange = r' }
+    in if l == i then (Right o, st') else (Left l, st)
+  case et of
+    Left l -> errP (ReasonDemand i l)
+    Right a -> pure a
 
 dropP :: Int -> P e Int
 dropP = fmap T.length . takeP
 
--- dropExactP :: Int -> P e ()
+dropExactP :: Int -> P e ()
+dropExactP = void . takeExactP
 
 takeWhileP :: (Char -> Bool) -> P e Text
 takeWhileP f = P $ state $ \st ->
@@ -211,12 +238,26 @@ takeWhileP f = P $ state $ \st ->
       r' = r { rangeStart = rangeStart r + l }
   in (o, st { stHay = h', stRange = r' })
 
--- takeWhile1P :: (Char -> Bool) -> P e Text
+takeWhile1P :: (Char -> Bool) -> P e Text
+takeWhile1P f = do
+  mt <- P $ state $ \st ->
+    let h = stHay st
+        o = T.takeWhile f h
+        l = T.length o
+        h' = T.drop l h
+        r = stRange st
+        r' = r { rangeStart = rangeStart r + l }
+        st' = st { stHay = h', stRange = r' }
+    in if l > 0 then (Just o, st') else (Nothing, st)
+  case mt of
+    Nothing -> errP (ReasonDemand 1 0)
+    Just a -> pure a
 
 dropWhileP :: (Char -> Bool) -> P e Int
 dropWhileP = fmap T.length . takeWhileP
 
--- dropWhile1P :: (Char -> Bool) -> P e Int
+dropWhile1P :: (Char -> Bool) -> P e Int
+dropWhile1P = fmap T.length . takeWhile1P
 
 betweenP :: P e x -> P e y -> P e a -> P e a
 betweenP px py pa = px *> pa <* py
