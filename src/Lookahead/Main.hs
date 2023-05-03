@@ -12,6 +12,7 @@ module Lookahead.Main
   , errReason
   , AltPhase (..)
   , InfixPhase (..)
+  , SplitType (..)
   , ParserT
   , Parser
   , parseT
@@ -26,12 +27,13 @@ module Lookahead.Main
   , lookP
   , expectP
   , splitP
+  , splitEndP
   , splitAllP
   , splitAll1P
-  -- , leadP
-  -- , lead1P
-  -- , trailP
-  -- , trail1P
+  , leadP
+  , lead1P
+  , trailP
+  , trail1P
   , infixP
   , takeP
   , dropP
@@ -114,7 +116,7 @@ data AltPhase = AltPhaseBranch | AltPhaseCont
 data InfixPhase = InfixPhaseLeft | InfixPhaseRight | InfixPhaseCont
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
-data SearchType = SearchTypeSplit | SearchTypeSplitAll | SearchTypeLead | SearchTypeTrail
+data SplitType = SplitTypeStart | SplitTypeEnd | SplitTypeAll
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 data Reason e r
@@ -124,7 +126,7 @@ data Reason e r
   | ReasonLeftover !Int
   | ReasonAlt !Text !(Seq (Text, AltPhase, r))
   | ReasonInfix !Text !(Seq (Int, InfixPhase, r))
-  | ReasonSearch !SearchType !Text !(Maybe (Int, r))
+  | ReasonSplit !SplitType !Text !(Maybe (Int, r))
   | ReasonEmptyQuery
   | ReasonFail !Text
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
@@ -320,7 +322,7 @@ splitP n p =
       st0 <- getP
       let (h1, h2) = T.breakOn n (stHay st0)
       if T.null h2
-        then stErrP (ReasonSearch SearchTypeSplit n Nothing)
+        then stErrP (ReasonSplit SplitTypeStart n Nothing)
         else do
           let r = stRange st0
               e1 = rangeStart r + T.length h1
@@ -329,8 +331,29 @@ splitP n p =
               st2 = st0 {stHay = T.drop l h2, stRange = r {rangeStart = e1 + l}}
           (ea1, _) <- lift (runParserT (p <* endP) st1)
           case ea1 of
-            Left err1 -> stErrP (ReasonSearch SearchTypeSplit n (Just (e1, err1)))
+            Left err1 -> stErrP (ReasonSplit SplitTypeStart n (Just (e1, err1)))
             Right a -> a <$ putP st2
+
+splitEndP :: Monad m => Text -> ParserT e m a -> ParserT e m a
+splitEndP n p = undefined
+
+-- if T.null n
+--   then stErrP ReasonEmptyQuery
+--   else do
+--     st0 <- getP
+--     let (h1, h2) = T.breakOnEnd n (stHay st0)
+--     if T.null h2
+--       then stErrP (ReasonSplit SplitTypeEnd n Nothing)
+--       else do
+--         let r = stRange st0
+--             e1 = rangeStart r + T.length h1
+--             st1 = st0 {stHay = h1, stRange = r {rangeEnd = e1}}
+--             l = T.length n
+--             st2 = st0 {stHay = T.drop l h2, stRange = r {rangeStart = e1 + l}}
+--         (ea1, _) <- lift (runParserT (p <* endP) st1)
+--         case ea1 of
+--           Left err1 -> stErrP (ReasonSplit SplitTypeEnd n (Just (e1, err1)))
+--           Right a -> a <$ putP st2
 
 zipWithOffset :: Int -> [Text] -> [(Int, Text)]
 zipWithOffset l = go 0
@@ -361,11 +384,27 @@ splitAllP n p = go
       let st1 = st0 {stHay = h1, stRange = Range s1 e1}
       (ea1, _) <- lift (runParserT (p <* endP) st1)
       case ea1 of
-        Left err1 -> stErrP (ReasonSearch SearchTypeSplitAll n (Just (e1, err1)))
+        Left err1 -> stErrP (ReasonSplit SplitTypeAll n (Just (e1, err1)))
         Right a -> goNext (acc :|> a) rest
 
 splitAll1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
 splitAll1P n p = liftA2 (:<|) (splitP n p) (splitAllP n p)
+
+leadP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+leadP n p = do
+  l <- leftoverP
+  if l == 0 then pure Empty else lead1P n p
+
+lead1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+lead1P n p = expectP n *> splitAllP n p
+
+trailP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+trailP n p = do
+  l <- leftoverP
+  if l == 0 then pure Empty else trail1P n p
+
+trail1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+trail1P n p = splitEndP n (splitAllP n p) <* endP
 
 subInfixP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> St -> (St -> Either (Err e) (a, b) -> m (Either (Err e) r, St)) -> Seq (Int, InfixPhase, Err e) -> [(Text, Text)] -> m (Either (Err e) r, St)
 subInfixP n pa pb st0 j = go
@@ -511,12 +550,11 @@ instance HasErrMessage e => HasErrMessage (Err e) where
                   let x = "Tried position: " <> T.pack (show i)
                   x : indent 1 (getErrMessage e)
             in  hd : tl
-          ReasonSearch ty op merr ->
+          ReasonSplit ty op merr ->
             let nm = case ty of
-                  SearchTypeSplit -> "Split"
-                  SearchTypeSplitAll -> "Split all"
-                  SearchTypeLead -> "Lead"
-                  SearchTypeTrail -> "Trail"
+                  SplitTypeStart -> "Split"
+                  SplitTypeEnd -> "Split end"
+                  SplitTypeAll -> "Split all"
                 hd = nm <> " operator failed: " <> op
             in  case merr of
                   Nothing -> [hd <> " - no results"]
