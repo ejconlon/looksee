@@ -56,6 +56,7 @@ module Looksie
   , stripP
   , stripStartP
   , stripEndP
+  , measureP
   , HasErrMessage (..)
   , errataE
   , renderE
@@ -584,6 +585,13 @@ stripStartP p = spaceP *> p
 
 stripEndP :: ParserT e m a -> ParserT e m a
 stripEndP p = p <* spaceP
+
+measureP :: ParserT e m a -> ParserT e m (a, Int)
+measureP p = do
+  start <- getsP (rangeStart . stRange)
+  a <- p
+  end <- getsP (rangeStart . stRange)
+  pure (a, end - start)
 
 class HasErrMessage e where
   getErrMessage :: e -> [Text]
