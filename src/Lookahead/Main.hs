@@ -25,7 +25,13 @@ module Lookahead.Main
   , greedy1P
   , lookP
   , expectP
-  , breakOnP
+  , splitP
+  , splitAllP
+  , splitAll1P
+  -- , leadP
+  -- , lead1P
+  -- , trailP
+  -- , trail1P
   , infixP
   , takeP
   , dropP
@@ -62,7 +68,6 @@ import Data.Bitraversable (Bitraversable (..))
 import Data.Char (isAlpha, isSpace)
 import Data.Foldable (foldl', toList)
 import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
-import Data.Maybe (maybeToList)
 import Data.Sequence (Seq (..))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -109,6 +114,9 @@ data AltPhase = AltPhaseBranch | AltPhaseCont
 data InfixPhase = InfixPhaseLeft | InfixPhaseRight | InfixPhaseCont
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
+data SearchType = SearchTypeSplit | SearchTypeSplitAll | SearchTypeLead | SearchTypeTrail
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
 data Reason e r
   = ReasonCustom !e
   | ReasonExpect !Text !Text
@@ -116,8 +124,8 @@ data Reason e r
   | ReasonLeftover !Int
   | ReasonAlt !Text !(Seq (Text, AltPhase, r))
   | ReasonInfix !Text !(Seq (Int, InfixPhase, r))
-  | ReasonBreakOn !Text !(Maybe (Int, r))
-  | ReasonEmptySearch
+  | ReasonSearch !SearchType !Text !(Maybe (Int, r))
+  | ReasonEmptyQuery
   | ReasonFail !Text
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
@@ -182,7 +190,7 @@ instance Monad (ParserT e m) where
 type Parser e = ParserT e Identity
 
 instance MonadFail (ParserT e m) where
-  fail = errP . ReasonFail . T.pack
+  fail = stErrP . ReasonFail . T.pack
 
 instance MonadTrans (ParserT e) where
   lift ma = ParserT (\st j -> ma >>= j st . Right)
@@ -210,9 +218,6 @@ instance MonadState s m => MonadState s (ParserT e m) where
 runParserT :: Applicative m => ParserT e m a -> St -> m (Either (Err e) a, St)
 runParserT (ParserT g) st = g st (\st' ea -> pure (ea, st'))
 
--- reflectP :: ParserT e m a -> ParserT e m (Either (Err e) a)
--- reflectP (ParserT g) = ParserT (\st j -> g st (\st' ea -> j st' (Right ea)))
-
 getP :: ParserT e m St
 getP = ParserT (\st j -> j st (Right st))
 
@@ -225,8 +230,14 @@ putP st = ParserT (\_ j -> j st (Right ()))
 stateP :: (St -> (a, St)) -> ParserT e m a
 stateP f = ParserT (\st j -> let (a, st') = f st in j st' (Right a))
 
-errP :: Reason e (Err e) -> ParserT e m a
-errP re = ParserT (\st j -> j st (Left (Err (ErrF (stRange st) re))))
+modifyP :: (St -> St) -> ParserT e m ()
+modifyP f = ParserT (\st j -> j (f st) (Right ()))
+
+-- mkErrP :: Range -> Reason e (Err e) -> ParserT e m a
+-- mkErrP ra re = ParserT (\st j -> j st (Left (Err (ErrF ra re))))
+
+stErrP :: Reason e (Err e) -> ParserT e m a
+stErrP re = ParserT (\st j -> j st (Left (Err (ErrF (stRange st) re))))
 
 leftoverP :: ParserT e m Int
 leftoverP = getsP (\st -> let Range s e = stRange st in e - s)
@@ -246,14 +257,14 @@ parseI p h =
     Right a -> pure (Just a)
 
 throwP :: e -> ParserT e m a
-throwP = errP . ReasonCustom
+throwP = stErrP . ReasonCustom
 
 endP :: ParserT e m ()
 endP = do
   l <- leftoverP
   if l == 0
     then pure ()
-    else errP (ReasonLeftover l)
+    else stErrP (ReasonLeftover l)
 
 optP :: ParserT e m a -> ParserT e m (Maybe a)
 optP (ParserT g) = ParserT $ \st0 j ->
@@ -299,17 +310,17 @@ expectP n = do
   o <- takeP (T.length n)
   if n == o
     then pure ()
-    else errP (ReasonExpect n o)
+    else stErrP (ReasonExpect n o)
 
-breakOnP :: Monad m => Text -> ParserT e m a -> ParserT e m a
-breakOnP n p =
+splitP :: Monad m => Text -> ParserT e m a -> ParserT e m a
+splitP n p =
   if T.null n
-    then errP ReasonEmptySearch
+    then stErrP ReasonEmptyQuery
     else do
       st0 <- getP
       let (h1, h2) = T.breakOn n (stHay st0)
       if T.null h2
-        then errP (ReasonBreakOn n Nothing)
+        then stErrP (ReasonSearch SearchTypeSplit n Nothing)
         else do
           let r = stRange st0
               e1 = rangeStart r + T.length h1
@@ -318,8 +329,43 @@ breakOnP n p =
               st2 = st0 {stHay = T.drop l h2, stRange = r {rangeStart = e1 + l}}
           (ea1, _) <- lift (runParserT (p <* endP) st1)
           case ea1 of
-            Left err1 -> errP (ReasonBreakOn n (Just (e1, err1)))
+            Left err1 -> stErrP (ReasonSearch SearchTypeSplit n (Just (e1, err1)))
             Right a -> a <$ putP st2
+
+zipWithOffset :: Int -> [Text] -> [(Int, Text)]
+zipWithOffset l = go 0
+ where
+  go !o = \case
+    [] -> []
+    x : xs -> (o, x) : go (o + l + T.length x) xs
+
+splitAllP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+splitAllP n p = go
+ where
+  go =
+    if T.null n
+      then stErrP ReasonEmptyQuery
+      else do
+        hs <- getsP (T.splitOn n . stHay)
+        let ohs = zipWithOffset (T.length n) hs
+        end <- getsP (rangeEnd . stRange)
+        vals <- goNext Empty ohs
+        modifyP (\st -> st {stHay = "", stRange = (stRange st) {rangeStart = end}})
+        pure vals
+  goNext !acc = \case
+    [] -> pure acc
+    (x1, h1) : rest -> do
+      st0 <- getP
+      let s1 = rangeStart (stRange st0) + x1
+      let e1 = s1 + T.length h1
+      let st1 = st0 {stHay = h1, stRange = Range s1 e1}
+      (ea1, _) <- lift (runParserT (p <* endP) st1)
+      case ea1 of
+        Left err1 -> stErrP (ReasonSearch SearchTypeSplitAll n (Just (e1, err1)))
+        Right a -> goNext (acc :|> a) rest
+
+splitAll1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+splitAll1P n p = liftA2 (:<|) (splitP n p) (splitAllP n p)
 
 subInfixP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> St -> (St -> Either (Err e) (a, b) -> m (Either (Err e) r, St)) -> Seq (Int, InfixPhase, Err e) -> [(Text, Text)] -> m (Either (Err e) r, St)
 subInfixP n pa pb st0 j = go
@@ -348,7 +394,7 @@ subInfixP n pa pb st0 j = go
 infixP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
 infixP n pa pb =
   if T.null n
-    then errP ReasonEmptySearch
+    then stErrP ReasonEmptyQuery
     else ParserT (\st0 j -> subInfixP n pa pb st0 j Empty (T.breakOnAll n (stHay st0)))
 
 takeP :: Int -> ParserT e m Text
@@ -372,7 +418,7 @@ takeExactP i = do
         st' = st {stHay = h', stRange = r'}
     in  if l == i then (Right o, st') else (Left l, st)
   case et of
-    Left l -> errP (ReasonDemand i l)
+    Left l -> stErrP (ReasonDemand i l)
     Right a -> pure a
 
 dropP :: Int -> ParserT e m Int
@@ -403,7 +449,7 @@ takeWhile1P f = do
         st' = st {stHay = h', stRange = r'}
     in  if l > 0 then (Just o, st') else (Nothing, st)
   case mt of
-    Nothing -> errP (ReasonDemand 1 0)
+    Nothing -> stErrP (ReasonDemand 1 0)
     Just a -> pure a
 
 dropWhileP :: (Char -> Bool) -> ParserT e m Int
@@ -444,35 +490,43 @@ indent :: Int -> [Text] -> [Text]
 indent i = let s = T.replicate (2 * i) " " in fmap (s <>)
 
 instance HasErrMessage e => HasErrMessage (Err e) where
-  getErrMessage (Err (ErrF _ re)) =
-    case re of
-      ReasonCustom e -> getErrMessage e
-      ReasonExpect expected actual -> ["Expected string: '" <> expected <> "' but found: '" <> actual <> "'"]
-      ReasonDemand expected actual -> ["Expected num chars: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)]
-      ReasonLeftover count -> ["Expected end but had leftover count: " <> T.pack (show count)]
-      ReasonAlt name errs ->
-        let hd = "Alternatives failed: " <> name
-            tl = indent 1 $ do
-              (n, _, e) <- toList errs
-              let x = "Tried alternative: " <> n
-              x : indent 1 (getErrMessage e)
-        in  hd : tl
-      ReasonInfix op errs ->
-        let hd = "Infix operator failed: " <> op
-            tl = indent 1 $ do
-              (i, _, e) <- toList errs
-              let x = "Tried position: " <> T.pack (show i)
-              x : indent 1 (getErrMessage e)
-        in  hd : tl
-      ReasonBreakOn op merr ->
-        let hd = "Break on operator failed: " <> op
-            tl = indent 1 $ do
-              (i, e) <- maybeToList merr
-              let x = "Tried position: " <> T.pack (show i)
-              x : indent 1 (getErrMessage e)
-        in  hd : tl
-      ReasonEmptySearch -> ["Empty string search"]
-      ReasonFail msg -> ["User reported failure: " <> msg]
+  getErrMessage (Err (ErrF (Range start end) re)) =
+    let pos = "Error in range: (" <> T.pack (show start) <> ", " <> T.pack (show end) <> ")"
+        body = case re of
+          ReasonCustom e -> getErrMessage e
+          ReasonExpect expected actual -> ["Expected string: '" <> expected <> "' but found: '" <> actual <> "'"]
+          ReasonDemand expected actual -> ["Expected num chars: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)]
+          ReasonLeftover count -> ["Expected end but had leftover count: " <> T.pack (show count)]
+          ReasonAlt name errs ->
+            let hd = "Alternatives failed: " <> name
+                tl = indent 1 $ do
+                  (n, _, e) <- toList errs
+                  let x = "Tried alternative: " <> n
+                  x : indent 1 (getErrMessage e)
+            in  hd : tl
+          ReasonInfix op errs ->
+            let hd = "Infix operator failed: " <> op
+                tl = indent 1 $ do
+                  (i, _, e) <- toList errs
+                  let x = "Tried position: " <> T.pack (show i)
+                  x : indent 1 (getErrMessage e)
+            in  hd : tl
+          ReasonSearch ty op merr ->
+            let nm = case ty of
+                  SearchTypeSplit -> "Split"
+                  SearchTypeSplitAll -> "Split all"
+                  SearchTypeLead -> "Lead"
+                  SearchTypeTrail -> "Trail"
+                hd = nm <> " operator failed: " <> op
+            in  case merr of
+                  Nothing -> [hd <> " - no results"]
+                  Just (i, e) ->
+                    let x = "Tried position: " <> T.pack (show i)
+                        tl = indent 1 (x : indent 1 (getErrMessage e))
+                    in  hd : tl
+          ReasonEmptyQuery -> ["Empty query string"]
+          ReasonFail msg -> ["User reported failure: " <> msg]
+    in  pos : body
 
 errataE :: HasErrMessage e => FilePath -> (Int -> (E.Line, E.Column)) -> Err e -> [E.Errata]
 errataE fp mkP e =
@@ -484,7 +538,7 @@ errataE fp mkP e =
 renderE :: HasErrMessage e => FilePath -> Text -> Err e -> Text
 renderE fp h e =
   let ov = mkOffsetVec h
-      mkP = if V.null ov then const (1, 1) else \i -> let (!l, !c) = ov V.! i in (l + 1, c + 1)
+      mkP = if V.null ov then const (1, 1) else \i -> let (!l, !c) = ov V.! min i (V.length ov - 1) in (l + 1, c + 1)
   in  TL.toStrict (E.prettyErrors h (errataE fp mkP e))
 
 printE :: HasErrMessage e => FilePath -> Text -> Err e -> IO ()
