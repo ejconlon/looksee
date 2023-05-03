@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Lookahead.Examples
+module Looksie.Examples
   ( Value (..)
   , jsonParser
   , Arith (..)
@@ -14,7 +14,7 @@ import Data.Sequence (Seq)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void)
-import Lookahead (Parser, altP, betweenP, expectP, greedy1P, infixP, sepByP, stripP, takeWhile1P, takeWhileP)
+import Looksie (Parser, altP, betweenP, expectP, greedy1P, infixP, sepByP, stripP, takeWhile1P, takeWhileP)
 
 data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObject !(Seq (Text, Value))
   deriving stock (Eq, Ord, Show)

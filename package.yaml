@@ -1,13 +1,13 @@
-name: lookahead
+name: looksie
 version: 0.1.0
 
-github: ejconlon/lookahead
+github: ejconlon/looksie
 license: AllRightsReserved
 author: Eric Conlon
 maintainer: ejconlon@gmail.com
 copyright: (c) 2023 Eric Conlon
-synopsis: parser with lookahead
-description: Please see the README on GitHub at <https://github.com/ejconlon/lookahead#readme>
+synopsis: parser with looksie
+description: Please see the README on GitHub at <https://github.com/ejconlon/looksie#readme>
 tested-with: GHC == 9.2.7
 
 language: GHC2021
@@ -65,7 +65,7 @@ library:
   source-dirs: src
 
 tests:
-  lookahead-test:
+  looksie-test:
     main: Main.hs
     source-dirs: test
     ghc-options:
@@ -73,6 +73,6 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - lookahead
+    - looksie
     - tasty
     - tasty-hunit

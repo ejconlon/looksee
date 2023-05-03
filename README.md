@@ -1,3 +1,3 @@
-# lookahead
+# looksie
 
-parser with lookahead
+A simple text parser with decent errors

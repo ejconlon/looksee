@@ -40,7 +40,3 @@ lint:
 # Apply hlint suggestions
 lint-apply:
   find {{ src_dirs }} -name '*.hs' | xargs -t -I % stack exec -- hlint % --refactor --refactor-options="--inplace"
-
-# Run the executable
-exe:
-  {{ stack_build }} --test --no-run-tests --exec lookahead-exe

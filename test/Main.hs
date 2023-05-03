@@ -16,6 +16,6 @@ main :: IO ()
 main =
   defaultMain $
     testGroup
-      "Lookahead"
+      "Looksie"
       [ testDummy
       ]

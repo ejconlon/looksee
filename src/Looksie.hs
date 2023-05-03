@@ -2,7 +2,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Lookahead
+module Looksie
   ( Range (..)
   , range
   , Reason (..)

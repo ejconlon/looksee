@@ -4,12 +4,12 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 
-name:           lookahead
+name:           looksie
 version:        0.1.0
-synopsis:       parser with lookahead
-description:    Please see the README on GitHub at <https://github.com/ejconlon/lookahead#readme>
-homepage:       https://github.com/ejconlon/lookahead#readme
-bug-reports:    https://github.com/ejconlon/lookahead/issues
+synopsis:       parser with looksie
+description:    Please see the README on GitHub at <https://github.com/ejconlon/looksie#readme>
+homepage:       https://github.com/ejconlon/looksie#readme
+bug-reports:    https://github.com/ejconlon/looksie/issues
 author:         Eric Conlon
 maintainer:     ejconlon@gmail.com
 copyright:      (c) 2023 Eric Conlon
@@ -22,14 +22,14 @@ extra-source-files:
 
 source-repository head
   type: git
-  location: https://github.com/ejconlon/lookahead
+  location: https://github.com/ejconlon/looksie
 
 library
   exposed-modules:
-      Lookahead
-      Lookahead.Examples
+      Looksie
+      Looksie.Examples
   other-modules:
-      Paths_lookahead
+      Paths_looksie
   hs-source-dirs:
       src
   default-extensions:
@@ -69,11 +69,11 @@ library
     , vector
   default-language: GHC2021
 
-test-suite lookahead-test
+test-suite looksie-test
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
-      Paths_lookahead
+      Paths_looksie
   hs-source-dirs:
       test
   default-extensions:
@@ -107,7 +107,7 @@ test-suite lookahead-test
     , bifunctors
     , containers
     , errata
-    , lookahead
+    , looksie
     , mtl
     , recursion-schemes
     , tasty
