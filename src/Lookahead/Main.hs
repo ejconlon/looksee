@@ -26,6 +26,7 @@ module Lookahead.Main
   , greedy1P
   , lookP
   , expectP
+  , expectEndP
   , splitP
   , splitEndP
   , splitAllP
@@ -37,11 +38,24 @@ module Lookahead.Main
   , infixP
   , takeP
   , dropP
+  , takeExactP
+  , dropExactP
   , takeWhileP
   , dropWhileP
+  , takeWhile1P
+  , dropWhile1P
+  , takeAllP
+  , dropAllP
+  , takeAll1P
+  , dropAll1P
+  , takeEndP
+  , dropEndP
   , betweenP
   , sepByP
   , spaceP
+  , stripP
+  , stripStartP
+  , stripEndP
   , HasErrMessage (..)
   , errataE
   , renderE
@@ -116,12 +130,15 @@ data AltPhase = AltPhaseBranch | AltPhaseCont
 data InfixPhase = InfixPhaseLeft | InfixPhaseRight | InfixPhaseCont
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
+data ExpectType = ExpectTypeStart | ExpectTypeEnd
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
 data SplitType = SplitTypeStart | SplitTypeEnd | SplitTypeAll
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 data Reason e r
   = ReasonCustom !e
-  | ReasonExpect !Text !Text
+  | ReasonExpect !ExpectType !Text !Text
   | ReasonDemand !Int !Int
   | ReasonLeftover !Int
   | ReasonAlt !Text !(Seq (Text, AltPhase, r))
@@ -192,7 +209,7 @@ instance Monad (ParserT e m) where
 type Parser e = ParserT e Identity
 
 instance MonadFail (ParserT e m) where
-  fail = stErrP . ReasonFail . T.pack
+  fail = errP . ReasonFail . T.pack
 
 instance MonadTrans (ParserT e) where
   lift ma = ParserT (\st j -> ma >>= j st . Right)
@@ -235,11 +252,8 @@ stateP f = ParserT (\st j -> let (a, st') = f st in j st' (Right a))
 modifyP :: (St -> St) -> ParserT e m ()
 modifyP f = ParserT (\st j -> j (f st) (Right ()))
 
--- mkErrP :: Range -> Reason e (Err e) -> ParserT e m a
--- mkErrP ra re = ParserT (\st j -> j st (Left (Err (ErrF ra re))))
-
-stErrP :: Reason e (Err e) -> ParserT e m a
-stErrP re = ParserT (\st j -> j st (Left (Err (ErrF (stRange st) re))))
+errP :: Reason e (Err e) -> ParserT e m a
+errP re = ParserT (\st j -> j st (Left (Err (ErrF (stRange st) re))))
 
 leftoverP :: ParserT e m Int
 leftoverP = getsP (\st -> let Range s e = stRange st in e - s)
@@ -259,14 +273,14 @@ parseI p h =
     Right a -> pure (Just a)
 
 throwP :: e -> ParserT e m a
-throwP = stErrP . ReasonCustom
+throwP = errP . ReasonCustom
 
 endP :: ParserT e m ()
 endP = do
   l <- leftoverP
   if l == 0
     then pure ()
-    else stErrP (ReasonLeftover l)
+    else errP (ReasonLeftover l)
 
 optP :: ParserT e m a -> ParserT e m (Maybe a)
 optP (ParserT g) = ParserT $ \st0 j ->
@@ -312,17 +326,24 @@ expectP n = do
   o <- takeP (T.length n)
   if n == o
     then pure ()
-    else stErrP (ReasonExpect n o)
+    else errP (ReasonExpect ExpectTypeStart n o)
+
+expectEndP :: Text -> ParserT e m ()
+expectEndP n = do
+  o <- takeEndP (T.length n)
+  if n == o
+    then pure ()
+    else errP (ReasonExpect ExpectTypeEnd n o)
 
 splitP :: Monad m => Text -> ParserT e m a -> ParserT e m a
 splitP n p =
   if T.null n
-    then stErrP ReasonEmptyQuery
+    then errP ReasonEmptyQuery
     else do
       st0 <- getP
       let (h1, h2) = T.breakOn n (stHay st0)
       if T.null h2
-        then stErrP (ReasonSplit SplitTypeStart n Nothing)
+        then errP (ReasonSplit SplitTypeStart n Nothing)
         else do
           let r = stRange st0
               e1 = rangeStart r + T.length h1
@@ -331,29 +352,28 @@ splitP n p =
               st2 = st0 {stHay = T.drop l h2, stRange = r {rangeStart = e1 + l}}
           (ea1, _) <- lift (runParserT (p <* endP) st1)
           case ea1 of
-            Left err1 -> stErrP (ReasonSplit SplitTypeStart n (Just (e1, err1)))
+            Left err1 -> errP (ReasonSplit SplitTypeStart n (Just (e1, err1)))
             Right a -> a <$ putP st2
 
 splitEndP :: Monad m => Text -> ParserT e m a -> ParserT e m a
-splitEndP n p = undefined
-
--- if T.null n
---   then stErrP ReasonEmptyQuery
---   else do
---     st0 <- getP
---     let (h1, h2) = T.breakOnEnd n (stHay st0)
---     if T.null h2
---       then stErrP (ReasonSplit SplitTypeEnd n Nothing)
---       else do
---         let r = stRange st0
---             e1 = rangeStart r + T.length h1
---             st1 = st0 {stHay = h1, stRange = r {rangeEnd = e1}}
---             l = T.length n
---             st2 = st0 {stHay = T.drop l h2, stRange = r {rangeStart = e1 + l}}
---         (ea1, _) <- lift (runParserT (p <* endP) st1)
---         case ea1 of
---           Left err1 -> stErrP (ReasonSplit SplitTypeEnd n (Just (e1, err1)))
---           Right a -> a <$ putP st2
+splitEndP n p =
+  if T.null n
+    then errP ReasonEmptyQuery
+    else do
+      st0 <- getP
+      let (h1, h2) = T.breakOnEnd n (stHay st0)
+      if T.null h1
+        then errP (ReasonSplit SplitTypeEnd n Nothing)
+        else do
+          let r = stRange st0
+              s2 = rangeEnd r - T.length h2
+              l = T.length n
+              st1 = st0 {stHay = T.dropEnd l h1, stRange = r {rangeEnd = s2 - l}}
+              st2 = st0 {stHay = h2, stRange = r {rangeStart = s2}}
+          (ea2, _) <- lift (runParserT (p <* endP) st2)
+          case ea2 of
+            Left err2 -> errP (ReasonSplit SplitTypeEnd n (Just (s2 - l, err2)))
+            Right a -> a <$ putP st1
 
 zipWithOffset :: Int -> [Text] -> [(Int, Text)]
 zipWithOffset l = go 0
@@ -367,7 +387,7 @@ splitAllP n p = go
  where
   go =
     if T.null n
-      then stErrP ReasonEmptyQuery
+      then errP ReasonEmptyQuery
       else do
         hs <- getsP (T.splitOn n . stHay)
         let ohs = zipWithOffset (T.length n) hs
@@ -384,7 +404,7 @@ splitAllP n p = go
       let st1 = st0 {stHay = h1, stRange = Range s1 e1}
       (ea1, _) <- lift (runParserT (p <* endP) st1)
       case ea1 of
-        Left err1 -> stErrP (ReasonSplit SplitTypeAll n (Just (e1, err1)))
+        Left err1 -> errP (ReasonSplit SplitTypeAll n (Just (e1, err1)))
         Right a -> goNext (acc :|> a) rest
 
 splitAll1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
@@ -433,7 +453,7 @@ subInfixP n pa pb st0 j = go
 infixP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
 infixP n pa pb =
   if T.null n
-    then stErrP ReasonEmptyQuery
+    then errP ReasonEmptyQuery
     else ParserT (\st0 j -> subInfixP n pa pb st0 j Empty (T.breakOnAll n (stHay st0)))
 
 takeP :: Int -> ParserT e m Text
@@ -457,7 +477,7 @@ takeExactP i = do
         st' = st {stHay = h', stRange = r'}
     in  if l == i then (Right o, st') else (Left l, st)
   case et of
-    Left l -> stErrP (ReasonDemand i l)
+    Left l -> errP (ReasonDemand i l)
     Right a -> pure a
 
 dropP :: Int -> ParserT e m Int
@@ -474,7 +494,8 @@ takeWhileP f = stateP $ \st ->
       h' = T.drop l h
       r = stRange st
       r' = r {rangeStart = rangeStart r + l}
-  in  (o, st {stHay = h', stRange = r'})
+      st' = st {stHay = h', stRange = r'}
+  in  (o, st')
 
 takeWhile1P :: (Char -> Bool) -> ParserT e m Text
 takeWhile1P f = do
@@ -486,9 +507,9 @@ takeWhile1P f = do
         r = stRange st
         r' = r {rangeStart = rangeStart r + l}
         st' = st {stHay = h', stRange = r'}
-    in  if l > 0 then (Just o, st') else (Nothing, st)
+    in  if l == 0 then (Nothing, st) else (Just o, st')
   case mt of
-    Nothing -> stErrP (ReasonDemand 1 0)
+    Nothing -> errP (ReasonDemand 1 0)
     Just a -> pure a
 
 dropWhileP :: (Char -> Bool) -> ParserT e m Int
@@ -496,6 +517,46 @@ dropWhileP = fmap T.length . takeWhileP
 
 dropWhile1P :: (Char -> Bool) -> ParserT e m Int
 dropWhile1P = fmap T.length . takeWhile1P
+
+takeAllP :: ParserT e m Text
+takeAllP = stateP $ \st ->
+  let h = stHay st
+      r = stRange st
+      r' = r {rangeStart = rangeEnd r}
+      st' = st {stHay = T.empty, stRange = r'}
+  in  (h, st')
+
+takeAll1P :: ParserT e m Text
+takeAll1P = do
+  mt <- stateP $ \st ->
+    let h = stHay st
+        r = stRange st
+        r' = r {rangeStart = rangeEnd r}
+        st' = st {stHay = T.empty, stRange = r'}
+    in  if T.null h then (Nothing, st) else (Just h, st')
+  case mt of
+    Nothing -> errP (ReasonDemand 1 0)
+    Just a -> pure a
+
+dropAllP :: ParserT e m Int
+dropAllP = fmap T.length takeAllP
+
+dropAll1P :: ParserT e m Int
+dropAll1P = fmap T.length takeAll1P
+
+takeEndP :: Int -> ParserT e m Text
+takeEndP i = stateP $ \st ->
+  let h = stHay st
+      o = T.takeEnd i h
+      h' = T.dropEnd i h
+      l = T.length o
+      r = stRange st
+      r' = r {rangeStart = rangeStart r + l}
+      st' = st {stHay = h', stRange = r'}
+  in  (o, st')
+
+dropEndP :: Int -> ParserT e m Int
+dropEndP = fmap T.length . takeEndP
 
 betweenP :: ParserT e m x -> ParserT e m y -> ParserT e m a -> ParserT e m a
 betweenP px py pa = px *> pa <* py
@@ -519,6 +580,15 @@ sepByP c p = go
 spaceP :: ParserT e m ()
 spaceP = void (dropWhileP isSpace)
 
+stripP :: ParserT e m a -> ParserT e m a
+stripP p = spaceP *> p <* spaceP
+
+stripStartP :: ParserT e m a -> ParserT e m a
+stripStartP p = spaceP *> p
+
+stripEndP :: ParserT e m a -> ParserT e m a
+stripEndP p = p <* spaceP
+
 class HasErrMessage e where
   getErrMessage :: e -> [Text]
 
@@ -533,9 +603,13 @@ instance HasErrMessage e => HasErrMessage (Err e) where
     let pos = "Error in range: (" <> T.pack (show start) <> ", " <> T.pack (show end) <> ")"
         body = case re of
           ReasonCustom e -> getErrMessage e
-          ReasonExpect expected actual -> ["Expected string: '" <> expected <> "' but found: '" <> actual <> "'"]
-          ReasonDemand expected actual -> ["Expected num chars: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)]
-          ReasonLeftover count -> ["Expected end but had leftover count: " <> T.pack (show count)]
+          ReasonExpect ty expected actual ->
+            let spot = case ty of ExpectTypeStart -> "start"; ExpectTypeEnd -> "end"
+            in  ["Expected string at " <> spot <> ": '" <> expected <> "' but found: '" <> actual <> "'"]
+          ReasonDemand expected actual ->
+            ["Expected num chars: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)]
+          ReasonLeftover count ->
+            ["Expected end but had leftover count: " <> T.pack (show count)]
           ReasonAlt name errs ->
             let hd = "Alternatives failed: " <> name
                 tl = indent 1 $ do
@@ -588,7 +662,7 @@ data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObje
 jsonParser :: Parser Void Value
 jsonParser = valP
  where
-  valP = spaceP *> rawValP <* spaceP
+  valP = stripP rawValP
   rawValP =
     altP
       "value"
@@ -603,12 +677,10 @@ jsonParser = valP
   arrayP = ValueArray <$> betweenP (expectP "[") (expectP "]") (sepByP (expectP ",") valP)
   rawPairP = do
     s <- rawStrP
-    spaceP
-    expectP ":"
-    spaceP
+    stripP (expectP ":")
     v <- rawValP
     pure (s, v)
-  pairP = spaceP *> rawPairP <* spaceP
+  pairP = stripP rawPairP
   objectP = ValueObject <$> betweenP (expectP "{") (expectP "}") (sepByP (expectP ",") pairP)
 
 data Arith
@@ -640,4 +712,4 @@ arithParser = rootP
       , ("num", ArithNum <$> numP)
       , ("var", ArithVar <$> identP)
       ]
-  rootP = spaceP *> rawRootP <* spaceP
+  rootP = stripP rawRootP
