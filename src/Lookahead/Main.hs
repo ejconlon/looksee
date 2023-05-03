@@ -25,7 +25,7 @@ module Lookahead.Main
   , greedy1P
   , lookP
   , expectP
-  -- , breakOnP
+  , breakOnP
   , infixP
   , takeP
   , dropP
@@ -62,6 +62,7 @@ import Data.Bitraversable (Bitraversable (..))
 import Data.Char (isAlpha, isSpace)
 import Data.Foldable (foldl', toList)
 import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
+import Data.Maybe (maybeToList)
 import Data.Sequence (Seq (..))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -115,6 +116,7 @@ data Reason e r
   | ReasonLeftover !Int
   | ReasonAlt !Text !(Seq (Text, AltPhase, r))
   | ReasonInfix !Text !(Seq (Int, InfixPhase, r))
+  | ReasonBreakOn !Text !(Maybe (Int, r))
   | ReasonEmptySearch
   | ReasonFail !Text
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
@@ -261,16 +263,18 @@ optP (ParserT g) = ParserT $ \st0 j ->
       Right a -> j st1 (Right (Just a))
 
 subAltP :: Monad m => Text -> St -> (St -> Either (Err e) a -> m (Either (Err e) r, St)) -> Seq (Text, AltPhase, Err e) -> [(Text, ParserT e m a)] -> m (Either (Err e) r, St)
-subAltP lab st0 j !errs = \case
-  [] -> j st0 (Left (Err (ErrF (stRange st0) (ReasonAlt lab errs))))
-  (x, p) : rest -> unParserT p st0 $ \st1 er ->
-    case er of
-      Left err -> subAltP lab st0 j (errs :|> (x, AltPhaseBranch, err)) rest
-      Right r -> do
-        q@(es, _) <- j st1 (Right r)
-        case es of
-          Left err -> subAltP lab st0 j (errs :|> (x, AltPhaseCont, err)) rest
-          Right _ -> pure q
+subAltP lab st0 j = go
+ where
+  go !errs = \case
+    [] -> j st0 (Left (Err (ErrF (stRange st0) (ReasonAlt lab errs))))
+    (x, p) : rest -> unParserT p st0 $ \st1 er ->
+      case er of
+        Left err -> go (errs :|> (x, AltPhaseBranch, err)) rest
+        Right r -> do
+          q@(es, _) <- j st1 (Right r)
+          case es of
+            Left err -> go (errs :|> (x, AltPhaseCont, err)) rest
+            Right _ -> pure q
 
 altP :: Monad m => Foldable f => Text -> f (Text, ParserT e m a) -> ParserT e m a
 altP lab falts = ParserT (\st0 j -> subAltP lab st0 j Empty (toList falts))
@@ -297,52 +301,55 @@ expectP n = do
     then pure ()
     else errP (ReasonExpect n o)
 
--- breakOnP :: Monad m => Text -> ParserT e m a -> ParserT e m a
--- breakOnP n p = go where
---   go =
---     if T.null n
---       then errP ReasonEmptySearch
---       else do
---         st0 <- ParserT get
---         let (h1, h2) = T.breakOn n (stHay st0)
---         if T.null h2
---           then _
---           else do
---             let r = stRange st0
---                 e1 = rangeStart r + T.length h1
---                 st1 = st0 {stHay = h1, stRange = r {rangeEnd = e1}}
---                 l = T.length n
---                 st2 = st0 {stHay = T.drop l h2, stRange = r {rangeStart = e1 + l}}
---             (ea1, _) <- lift (runParserT (p <* endP) st1)
---             case ea1 of
---               Left err1 -> _
---               Right a -> a <$ ParserT (put st2)
+breakOnP :: Monad m => Text -> ParserT e m a -> ParserT e m a
+breakOnP n p =
+  if T.null n
+    then errP ReasonEmptySearch
+    else do
+      st0 <- getP
+      let (h1, h2) = T.breakOn n (stHay st0)
+      if T.null h2
+        then errP (ReasonBreakOn n Nothing)
+        else do
+          let r = stRange st0
+              e1 = rangeStart r + T.length h1
+              st1 = st0 {stHay = h1, stRange = r {rangeEnd = e1}}
+              l = T.length n
+              st2 = st0 {stHay = T.drop l h2, stRange = r {rangeStart = e1 + l}}
+          (ea1, _) <- lift (runParserT (p <* endP) st1)
+          case ea1 of
+            Left err1 -> errP (ReasonBreakOn n (Just (e1, err1)))
+            Right a -> a <$ putP st2
 
-infixP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
-infixP n pa pb = go
+subInfixP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> St -> (St -> Either (Err e) (a, b) -> m (Either (Err e) r, St)) -> Seq (Int, InfixPhase, Err e) -> [(Text, Text)] -> m (Either (Err e) r, St)
+subInfixP n pa pb st0 j = go
  where
-  go =
-    if T.null n
-      then errP ReasonEmptySearch
-      else do
-        st0 <- getP
-        goNext st0 Empty (T.breakOnAll n (stHay st0))
-  goNext st0 !eacc = \case
-    [] -> errP (ReasonInfix n eacc)
+  go !errs = \case
+    [] -> j st0 (Left (Err (ErrF (stRange st0) (ReasonInfix n errs))))
     (h1, h2) : rest -> do
       let r = stRange st0
           e1 = rangeStart r + T.length h1
           st1 = st0 {stHay = h1, stRange = r {rangeEnd = e1}}
           l = T.length n
           st2 = st0 {stHay = T.drop l h2, stRange = r {rangeStart = e1 + l}}
-      (ea1, _) <- lift (runParserT (pa <* endP) st1)
+      (ea1, _) <- runParserT (pa <* endP) st1
       case ea1 of
-        Left err1 -> goNext st0 (eacc :|> (e1, InfixPhaseLeft, err1)) rest
+        Left err1 -> go (errs :|> (e1, InfixPhaseLeft, err1)) rest
         Right a -> do
-          (ea2, st3) <- lift (runParserT pb st2)
+          (ea2, st3) <- runParserT pb st2
           case ea2 of
-            Left err2 -> goNext st0 (eacc :|> (e1, InfixPhaseRight, err2)) rest
-            Right b -> (a, b) <$ putP st3
+            Left err2 -> go (errs :|> (e1, InfixPhaseRight, err2)) rest
+            Right b -> do
+              q@(ea3, _) <- j st3 (Right (a, b))
+              case ea3 of
+                Left err3 -> go (errs :|> (e1, InfixPhaseCont, err3)) rest
+                Right _ -> pure q
+
+infixP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
+infixP n pa pb =
+  if T.null n
+    then errP ReasonEmptySearch
+    else ParserT (\st0 j -> subInfixP n pa pb st0 j Empty (T.breakOnAll n (stHay st0)))
 
 takeP :: Int -> ParserT e m Text
 takeP i = stateP $ \st ->
@@ -454,6 +461,13 @@ instance HasErrMessage e => HasErrMessage (Err e) where
         let hd = "Infix operator failed: " <> op
             tl = indent 1 $ do
               (i, _, e) <- toList errs
+              let x = "Tried position: " <> T.pack (show i)
+              x : indent 1 (getErrMessage e)
+        in  hd : tl
+      ReasonBreakOn op merr ->
+        let hd = "Break on operator failed: " <> op
+            tl = indent 1 $ do
+              (i, e) <- maybeToList merr
               let x = "Tried position: " <> T.pack (show i)
               x : indent 1 (getErrMessage e)
         in  hd : tl

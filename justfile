@@ -19,7 +19,7 @@ clean:
 
 # Enter repl
 ghci:
-  stack ghci --test
+  stack ghci --test --ghci-options "-XOverloadedStrings"
 
 # Open browser with generated docs
 docs:
