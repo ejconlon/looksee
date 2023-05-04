@@ -57,6 +57,20 @@ module Looksie
   , stripStartP
   , stripEndP
   , measureP
+  , headP
+  , signedP
+  , intP
+  , uintP
+  , decP
+  , udecP
+  , repeatP
+  , repeat1P
+  , space1P
+  , strip1P
+  , stripStart1P
+  , stripEnd1P
+  , sepBy1P
+  , sepBy2P
   , HasErrMessage (..)
   , errataE
   , renderE
@@ -73,14 +87,16 @@ import Control.Monad.Identity (Identity (..))
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.State.Strict (MonadState (..))
 import Control.Monad.Trans (MonadTrans (..))
--- import Control.Monad.Writer.Strict (MonadWriter (..))
+import Control.Monad.Writer.Strict (MonadWriter (..))
 import Data.Bifoldable (Bifoldable (..))
 import Data.Bifunctor (Bifunctor (..))
 import Data.Bifunctor.TH (deriveBifoldable, deriveBifunctor, deriveBitraversable)
 import Data.Bitraversable (Bitraversable (..))
-import Data.Char (isSpace)
-import Data.Foldable (toList)
+import Data.Char (intToDigit, isSpace)
+import Data.Foldable (foldl', toList)
 import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
+import Data.Maybe (fromMaybe, isJust)
+import Data.Ratio ((%))
 import Data.Sequence (Seq (..))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -215,11 +231,19 @@ instance MonadReader r m => MonadReader r (ParserT e m) where
   ask = lift ask
   local f (ParserT g) = ParserT (\st j -> local f (g st j))
 
--- instance MonadWriter w m => MonadWriter w (ParserT e m) where
---   writer = lift . writer
---   tell = lift . tell
---   listen (ParserT g) = ParserT (\st j -> _)
---   pass (ParserT g) = ParserT (\st j -> _)
+instance MonadWriter w m => MonadWriter w (ParserT e m) where
+  writer = lift . writer
+  tell = lift . tell
+  listen (ParserT g) = ParserT $ \st j -> do
+    ((ea, st'), w) <- listen (g st (\st' ea -> pure (ea, st')))
+    j st' (fmap (,w) ea)
+
+  pass (ParserT g) = ParserT $ \st j -> do
+    (ea, st') <- pass (fmap helpPass (g st (\st' eaww -> pure (eaww, st'))))
+    j st' ea
+
+helpPass :: (Either (Err e) (a, w -> w), St) -> ((Either (Err e) a, St), w -> w)
+helpPass (eaww, st') = either (\e -> ((Left e, st'), id)) (\(a, ww) -> ((Right a, st'), ww)) eaww
 
 instance MonadIO m => MonadIO (ParserT e m) where
   liftIO = lift . liftIO
@@ -592,6 +616,70 @@ measureP p = do
   a <- p
   end <- getsP (rangeStart . stRange)
   pure (a, end - start)
+
+headP :: ParserT e m Char
+headP = fmap T.head (takeExactP 1)
+
+signedP :: Num a => ParserT e m a -> ParserT e m a
+signedP p = do
+  ms <- optP (expectP "-")
+  case ms of
+    Nothing -> p
+    Just _ -> fmap negate p
+
+intP :: Monad m => ParserT e m Integer
+intP = signedP uintP
+
+uintP :: Monad m => ParserT e m Integer
+uintP = foldl' addDigit 0 <$> greedy1P digitP
+ where
+  addDigit n d = n * 10 + d
+  digitP = altP "digit" (fmap (\i -> let j = T.singleton (intToDigit i) in (j, fromIntegral i <$ expectP j)) [0 .. 9])
+
+decP :: Monad m => ParserT e m Rational
+decP = signedP udecP
+
+udecP :: Monad m => ParserT e m Rational
+udecP = do
+  whole <- fmap fromInteger uintP
+  dot <- fmap isJust (optP (expectP "."))
+  if dot
+    then do
+      (numerator, places) <- measureP uintP
+      let denominator = 10 ^ places
+          part = numerator % denominator
+      pure (whole + part)
+    else pure whole
+
+repeatP :: ParserT e m a -> ParserT e m (Seq a)
+repeatP p = go Empty
+ where
+  go !acc = do
+    ma <- optP p
+    case ma of
+      Nothing -> pure acc
+      Just a -> go (acc :|> a)
+
+repeat1P :: ParserT e m a -> ParserT e m (Seq a)
+repeat1P p = liftA2 (:<|) p (repeatP p)
+
+space1P :: ParserT e m ()
+space1P = void (dropWhile1P isSpace)
+
+strip1P :: ParserT e m a -> ParserT e m a
+strip1P p = space1P *> p <* space1P
+
+stripStart1P :: ParserT e m a -> ParserT e m a
+stripStart1P p = space1P *> p
+
+stripEnd1P :: ParserT e m a -> ParserT e m a
+stripEnd1P p = p <* space1P
+
+sepBy1P :: ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+sepBy1P px pa = liftA2 (:<|) pa (fmap (fromMaybe Empty) (optP (px *> sepByP px pa)))
+
+sepBy2P :: ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+sepBy2P px pa = liftA2 (:<|) (pa <* px) (sepBy1P px pa)
 
 class HasErrMessage e where
   getErrMessage :: e -> [Text]
