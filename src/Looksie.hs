@@ -28,14 +28,14 @@ module Looksie
   , lookP
   , labelP
   , expectP
-  , splitNearP
-  , splitFarP
-  , splitAllP
-  , splitAll1P
-  , leadP
-  , lead1P
-  , trailP
-  , trail1P
+  , searchNearP
+  , searchFarP
+  , searchAllP
+  , searchAll1P
+  , searchLeadP
+  , searchLead1P
+  , searchTrailP
+  , searchTrail1P
   , infixRP
   , infixLP
   , takeP
@@ -392,35 +392,49 @@ expectP n = do
     then pure ()
     else errP (ReasonExpect n o)
 
-splitNearP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
-splitNearP px pa = fmap (\(x, a, _) -> (a, x)) (infixRP pa px (pure ()))
+searchNearP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
+searchNearP px pa = fmap (\(x, a, _) -> (x, a)) (infixRP px pa (pure ()))
 
-splitFarP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
-splitFarP px pa = fmap (\(x, a, _) -> (x, a)) (infixRP px pa (pure ()))
+searchFarP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
+searchFarP px pa = fmap (\(x, a, _) -> (x, a)) (infixLP px pa (pure ()))
 
-splitAllP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-splitAllP px pa = go
+searchAllP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+searchAllP px pa = go
  where
-  go = fmap (maybe Empty (\(_, a, as) -> a :<| as)) (optInfixRP px pa go)
+  go = do
+    maas <- optInfixRP px pa go
+    case maas of
+      Nothing -> fmap (maybe Empty (:<| Empty)) (optP pa)
+      Just (_, a, as) -> pure (a :<| as)
 
-splitAll1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-splitAll1P px pa = liftA2 (:<|) (fmap snd (splitNearP px pa)) (splitAllP px pa)
+searchAll1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+searchAll1P px pa = go
+ where
+  go = do
+    maas <- optInfixRP px pa go
+    case maas of
+      Nothing -> fmap (:<| Empty) pa
+      Just (_, a, as) -> pure (a :<| as)
 
-leadP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-leadP px pa = do
-  l <- leftoverP
-  if l == 0 then pure Empty else lead1P px pa
+searchLeadP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+searchLeadP px pa = do
+  mu <- optP px
+  case mu of
+    Nothing -> pure Empty
+    Just _ -> searchAll1P px pa
 
-lead1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-lead1P px pa = px *> splitAllP px pa
+searchLead1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+searchLead1P px pa = px *> searchAll1P px pa
 
-trailP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-trailP px pa = do
-  l <- leftoverP
-  if l == 0 then pure Empty else trail1P px pa
+searchTrailP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+searchTrailP px pa = do
+  as <- searchAllP px pa
+  case as of
+    Empty -> pure Empty
+    _ -> as <$ px
 
-trail1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-trail1P px pa = fmap (\(_, sa, _) -> sa) (infixLP px (splitAllP px pa) endP)
+searchTrail1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+searchTrail1P px pa = searchAll1P px pa <* px
 
 moveStFwd :: St -> Maybe St
 moveStFwd st =
@@ -492,7 +506,7 @@ requireInfix :: (St -> Either (Err e) (x, a, b) -> m (r, St)) -> (St -> Either (
 requireInfix j st = \case
   Right mxab ->
     case mxab of
-      Nothing -> j st (Left (Err (ErrF (stRange st) (ReasonInfix Empty))))
+      Nothing -> j st (Left (Err (ErrF (stRange st) ReasonEmpty)))
       Just xab -> j st (Right xab)
   Left e -> j st (Left e)
 
@@ -591,6 +605,29 @@ dropAllP = fmap T.length takeAllP
 
 dropAll1P :: ParserT e m Int
 dropAll1P = fmap T.length takeAll1P
+
+data Step e a = StepErr !e | StepDone !a | StepEmpty | StepCont
+  deriving stock (Eq, Ord, Show)
+
+data Res e a = ResErr !e | ResDone !a | ResEmpty
+  deriving stock (Eq, Ord, Show)
+
+-- foldRes :: (s -> Maybe Char -> (Step e a, s)) -> Text -> (Res e a, Int, Text)
+-- foldRes = undefined
+
+-- foldP :: (s -> Maybe Char -> (Step e a, s)) -> ParserT e m a
+-- foldP f = ParserT $ \st j -> do
+--   let (res, newEnd, newHay) = foldRes f (stHay st)
+--   undefined
+
+strP :: Char -> ParserT e m Text
+strP = undefined
+
+doubleStrP :: ParserT e m Text
+doubleStrP = undefined
+
+singleStrP :: ParserT e m Text
+singleStrP = undefined
 
 betweenP :: ParserT e m x -> ParserT e m y -> ParserT e m a -> ParserT e m a
 betweenP px py pa = px *> pa <* py
@@ -712,7 +749,7 @@ instance HasErrMessage e => HasErrMessage (Err e) where
                 tl = indent 1 (getErrMessage e)
             in  hd : tl
           ReasonExpect expected actual ->
-            ["Expected text: " <> expected <> "' but found: '" <> actual <> "'"]
+            ["Expected text: '" <> expected <> "' but found: '" <> actual <> "'"]
           ReasonDemand expected actual ->
             ["Expected count: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)]
           ReasonLeftover count ->
@@ -724,7 +761,7 @@ instance HasErrMessage e => HasErrMessage (Err e) where
                   "Tried:" : indent 1 (getErrMessage e)
             in  hd : tl
           ReasonInfix errs ->
-            let hd = "Infix/split failed:"
+            let hd = "Infix/search failed:"
                 tl = indent 1 $ do
                   (i, _, e) <- toList errs
                   let x = "Tried position: " <> T.pack (show i)
