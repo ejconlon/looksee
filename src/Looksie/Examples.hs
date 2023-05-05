@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Example parsers
 module Looksie.Examples
   ( Value (..)
   , jsonParser
@@ -16,9 +17,11 @@ import Data.Text qualified as T
 import Data.Void (Void)
 import Looksie (Parser, altP, betweenP, decP, doubleStrP, expectP, greedy1P, infixRP, labelP, sepByP, stripP, takeWhile1P)
 
+-- | A JSON value
 data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObject !(Seq (Text, Value)) | ValueNum !Rational
   deriving stock (Eq, Ord, Show)
 
+-- | A JSON parser (modulo some differences in numeric parsing)
 jsonParser :: Parser Void Value
 jsonParser = valP
  where
@@ -43,6 +46,7 @@ jsonParser = valP
   pairP = stripP rawPairP
   objectP = ValueObject <$> betweenP (expectP "{") (expectP "}") (sepByP (expectP ",") pairP)
 
+-- | An arithmetic expression
 data Arith
   = ArithNum !Int
   | ArithVar !Text
@@ -52,6 +56,7 @@ data Arith
   | ArithSub Arith Arith
   deriving stock (Eq, Ord, Show)
 
+-- | A parser for arithmetic expressions
 arithParser :: Parser Void Arith
 arithParser = rootP
  where

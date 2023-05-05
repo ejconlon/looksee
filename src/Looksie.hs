@@ -2,6 +2,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UndecidableInstances #-}
 
+-- | A simple text parser with decent errors
 module Looksie
   ( Label (..)
   , Range (..)
@@ -222,6 +223,7 @@ errRange = efRange . unErr
 errReason :: Err e -> Reason e (Err e)
 errReason = efReason . unErr
 
+-- private
 newtype T e m a = T {unT :: ExceptT (Err e) (StateT St m) a}
   deriving newtype (Functor, Applicative, Monad, MonadIO, MonadState St, MonadError (Err e))
 
@@ -232,15 +234,19 @@ deriving instance MonadReader r m => MonadReader r (T e m)
 
 deriving instance MonadWriter w m => MonadWriter w (T e m)
 
+-- private
 runT :: T e m a -> St -> m (Either (Err e) a, St)
 runT = runStateT . runExceptT . unT
 
+-- private
 mkErrT :: Monad m => Reason e (Err e) -> T e m (Err e)
 mkErrT re = gets stRange >>= \ra -> throwError (Err (ErrF ra re))
 
+-- private
 errT :: Monad m => Reason e (Err e) -> T e m a
 errT = mkErrT >=> throwError
 
+-- private
 tryT :: Monad m => T e m r -> T e m (Either (Err e) r)
 tryT t = get >>= \st -> lift (runT t st) >>= \(er, st') -> er <$ put st'
 
@@ -323,11 +329,13 @@ errP re = ParserT (\j -> mkErrT re >>= j . Left)
 leftoverP :: Monad m => ParserT e m Int
 leftoverP = getsP (\st -> let Range s e = stRange st in e - s)
 
--- | Run a parser transformer
+-- | Run a parser transformer. You must consume all input or this will error!
+-- If you really don't care about the rest of the input, you can always
+-- discard it with 'dropAllP'.
 parseT :: Monad m => ParserT e m a -> Text -> m (Either (Err e) a)
 parseT p h = fmap fst (runT (runParserT (p <* endP)) (St h (range h)))
 
--- | Run a parser
+-- | Run a parser (see 'parseT')
 parse :: Parser e a -> Text -> Either (Err e) a
 parse p h = runIdentity (parseT p h)
 
@@ -414,6 +422,7 @@ labelP lab (ParserT g) = ParserT $ \j -> g $ \case
   Left e -> mkErrT (ReasonLabeled lab e) >>= j . Left
   Right a -> j (Right a)
 
+-- | Expect the given text at the start of the range
 expectP :: Monad m => Text -> ParserT e m ()
 expectP n = do
   o <- takeP (T.length n)
@@ -421,12 +430,21 @@ expectP n = do
     then pure ()
     else errP (ReasonExpect n o)
 
+-- | Expect the given character at the start of the range
+expectHeadP :: Monad m => Char -> ParserT e m ()
+expectHeadP = expectP . T.singleton
+
+-- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
+-- Chooses splits from START to END of range (see 'infixRP').
 splitNearP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
 splitNearP px pa = fmap (\(x, a, _) -> (x, a)) (infixRP px pa (pure ()))
 
+-- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
+-- Chooses splits from END to START of range (see 'infixRP').
 splitFarP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
 splitFarP px pa = fmap (\(x, a, _) -> (x, a)) (infixLP px pa (pure ()))
 
+-- | Split on every delimiter, parsing all segments with a narrowed range
 splitAllP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 splitAllP px pa = go
  where
@@ -436,6 +454,7 @@ splitAllP px pa = go
       Nothing -> fmap (maybe Empty Seq.singleton) (optP pa)
       Just (_, a, as) -> pure (a :<| as)
 
+-- | Like 'splitAllP' but ensures the sequence is at least length 1
 splitAll1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 splitAll1P px pa = go
  where
@@ -445,9 +464,11 @@ splitAll1P px pa = go
       Nothing -> fmap Seq.singleton pa
       Just (_, a, as) -> pure (a :<| as)
 
+-- | Like 'splitAllP' but ensures the sequence is at least length 2 (i.e. there was a delimiter)
 splitAll2P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 splitAll2P px pa = liftA2 (:<|) (pa <* px) (splitAll1P px pa)
 
+-- | Like 'splitAllP' but ensures a leading delimiter
 leadP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 leadP px pa = do
   mu <- optP px
@@ -455,9 +476,11 @@ leadP px pa = do
     Nothing -> pure Empty
     Just _ -> splitAll1P px pa
 
+-- | Like 'splitAll1P' but ensures a leading delimiter
 lead1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 lead1P px pa = px *> splitAll1P px pa
 
+-- | Like 'splitAllP' but ensures a trailing delimiter
 trailP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 trailP px pa = do
   as <- splitAllP px pa
@@ -465,9 +488,11 @@ trailP px pa = do
     Empty -> pure Empty
     _ -> as <$ px
 
+-- | Like 'splitAll1P' but ensures a trailing delimiter
 trail1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 trail1P px pa = splitAll1P px pa <* px
 
+-- private
 moveStFwd :: St -> Maybe St
 moveStFwd st =
   let (Range s e) = stRange st
@@ -475,11 +500,13 @@ moveStFwd st =
         then Nothing
         else Just (St {stRange = Range (s + 1) e, stHay = T.tail (stHay st)})
 
+-- private
 initStBwd :: St -> St
 initStBwd st0 =
   let e = rangeEnd (stRange st0)
   in  St {stRange = Range e e, stHay = ""}
 
+-- private
 moveStBwd :: St -> St -> Maybe St
 moveStBwd st0 st =
   let s0 = rangeStart (stRange st0)
@@ -489,6 +516,7 @@ moveStBwd st0 st =
         then Nothing
         else Just (St {stRange = Range (s - 1) e, stHay = T.drop (s - 1) hay0})
 
+-- private
 subInfixP
   :: Monad m
   => (St -> Maybe St)
@@ -573,6 +601,7 @@ infixLP px pa pb = ParserT $ \j -> do
   put (initStBwd st0)
   subInfixP (moveStBwd st0) px pa pb (requireInfix j) st0 Empty
 
+-- | Take the given number of characters from the start of the range, or fewer if empty
 takeP :: Monad m => Int -> ParserT e m Text
 takeP i = stateP $ \st ->
   let h = stHay st
@@ -583,6 +612,7 @@ takeP i = stateP $ \st ->
       st' = st {stHay = h', stRange = r'}
   in  (o, st')
 
+-- | Take exactly the given number of characters from the start of the range, or error
 takeExactP :: Monad m => Int -> ParserT e m Text
 takeExactP i = do
   et <- stateP $ \st ->
@@ -597,12 +627,15 @@ takeExactP i = do
     Left l -> errP (ReasonDemand i l)
     Right a -> pure a
 
+-- | Drop the given number of characters from the start of the range, or fewer if empty
 dropP :: Monad m => Int -> ParserT e m Int
 dropP = fmap T.length . takeP
 
+-- | Drop exactly the given number of characters from the start of the range, or error
 dropExactP :: Monad m => Int -> ParserT e m ()
 dropExactP = void . takeExactP
 
+-- | Take characters from the start of the range satisfying the predicate
 takeWhileP :: Monad m => (Char -> Bool) -> ParserT e m Text
 takeWhileP f = stateP $ \st ->
   let h = stHay st
@@ -614,6 +647,7 @@ takeWhileP f = stateP $ \st ->
       st' = st {stHay = h', stRange = r'}
   in  (o, st')
 
+-- | Like 'takeWhileP' but ensures at least 1 character has been taken
 takeWhile1P :: Monad m => (Char -> Bool) -> ParserT e m Text
 takeWhile1P f = do
   mt <- stateP $ \st ->
@@ -629,12 +663,15 @@ takeWhile1P f = do
     Nothing -> errP (ReasonDemand 1 0)
     Just a -> pure a
 
+-- | Drop characters from the start of the range satisfying the predicate
 dropWhileP :: Monad m => (Char -> Bool) -> ParserT e m Int
 dropWhileP = fmap T.length . takeWhileP
 
+-- | Like 'dropWhileP' but ensures at least 1 character has been dropped
 dropWhile1P :: Monad m => (Char -> Bool) -> ParserT e m Int
 dropWhile1P = fmap T.length . takeWhile1P
 
+-- | Take the remaining range, leaving it empty
 takeAllP :: Monad m => ParserT e m Text
 takeAllP = stateP $ \st ->
   let h = stHay st
@@ -643,6 +680,7 @@ takeAllP = stateP $ \st ->
       st' = st {stHay = T.empty, stRange = r'}
   in  (h, st')
 
+-- | Like 'takeAllP' but ensures at least 1 character has been taken
 takeAll1P :: Monad m => ParserT e m Text
 takeAll1P = do
   mt <- stateP $ \st ->
@@ -655,12 +693,15 @@ takeAll1P = do
     Nothing -> errP (ReasonDemand 1 0)
     Just a -> pure a
 
+-- | Drop the remaining range, leaving it empty
 dropAllP :: Monad m => ParserT e m Int
 dropAllP = fmap T.length takeAllP
 
+-- | Like 'dropAllP' but ensures at least 1 character has been dropped
 dropAll1P :: Monad m => ParserT e m Int
 dropAll1P = fmap T.length takeAll1P
 
+-- | Parse with some local state
 scopeP :: Monad m => s -> ParserT e (StateT s m) a -> ParserT e m a
 scopeP s0 p = ParserT $ \j -> do
   st0 <- get
@@ -668,6 +709,7 @@ scopeP s0 p = ParserT $ \j -> do
   put st1
   j ea
 
+-- | Repeats the parser until it returns a 'Just' value
 iterP :: ParserT e m (Maybe a) -> ParserT e m a
 iterP p = go
  where
@@ -675,6 +717,7 @@ iterP p = go
 
 data StrState = StrState !Bool !(Seq Char)
 
+-- | Parse a string with a custom quote character. Supports backslash-escaping.
 strP :: Monad m => Char -> ParserT e m Text
 strP d = do
   expectP (T.singleton d)
@@ -694,15 +737,19 @@ strP d = do
                 else (Nothing, StrState True buf)
             else (Nothing, StrState False (buf :|> c))
 
+-- | Parse a double-quoted string
 doubleStrP :: Monad m => ParserT e m Text
 doubleStrP = strP '"'
 
+-- | Parse a single-quoted string
 singleStrP :: Monad m => ParserT e m Text
 singleStrP = strP '\''
 
+-- | Parse between an opening delimiter (first parser) and a closing delimited (second parser)
 betweenP :: ParserT e m x -> ParserT e m y -> ParserT e m a -> ParserT e m a
 betweenP px py pa = px *> pa <* py
 
+-- | Parse a sequence of items delimited by the first parser
 sepByP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 sepByP c p = go
  where
@@ -719,18 +766,23 @@ sepByP c p = go
         a <- p
         goNext (acc :|> a)
 
+-- | Consumes many spaces at the start of the range
 spaceP :: Monad m => ParserT e m ()
 spaceP = void (dropWhileP isSpace)
 
+-- | Strips spaces before and after parsing
 stripP :: Monad m => ParserT e m a -> ParserT e m a
 stripP p = spaceP *> p <* spaceP
 
+-- | Strips spaces before parsing
 stripStartP :: Monad m => ParserT e m a -> ParserT e m a
 stripStartP p = spaceP *> p
 
+-- | Strips spaces after parsing
 stripEndP :: Monad m => ParserT e m a -> ParserT e m a
 stripEndP p = p <* spaceP
 
+-- | Parses and returns the length of the consumed input along with the result
 measureP :: Monad m => ParserT e m a -> ParserT e m (a, Int)
 measureP p = do
   start <- getsP (rangeStart . stRange)
@@ -738,9 +790,11 @@ measureP p = do
   end <- getsP (rangeStart . stRange)
   pure (a, end - start)
 
+-- | Takes exactly 1 character from the start of the range
 headP :: Monad m => ParserT e m Char
 headP = fmap T.head (takeExactP 1)
 
+-- | Add signed-ness to any numeric parser
 signedP :: (Monad m, Num a) => ParserT e m a -> ParserT e m a
 signedP p = do
   ms <- optP (expectP "-")
@@ -748,18 +802,22 @@ signedP p = do
     Nothing -> p
     Just _ -> fmap negate p
 
+-- | Parse an signed integer
 intP :: Monad m => ParserT e m Integer
 intP = signedP uintP
 
+-- | Parse an unsigned integer
 uintP :: Monad m => ParserT e m Integer
 uintP = foldl' addDigit 0 <$> greedy1P digitP
  where
   addDigit n d = n * 10 + d
   digitP = altP (fmap (\i -> let j = T.singleton (intToDigit i) in (fromIntegral i <$ expectP j)) [0 .. 9])
 
+-- | Parse a signed decimal
 decP :: Monad m => ParserT e m Rational
 decP = signedP udecP
 
+-- | Parse an unsigned decimal
 udecP :: Monad m => ParserT e m Rational
 udecP = do
   whole <- fmap fromInteger uintP
@@ -772,6 +830,7 @@ udecP = do
       pure (whole + part)
     else pure whole
 
+-- | Repeat a parser until it fails, collecting the results.
 repeatP :: Monad m => ParserT e m a -> ParserT e m (Seq a)
 repeatP p = go Empty
  where
@@ -781,33 +840,42 @@ repeatP p = go Empty
       Nothing -> pure acc
       Just a -> go (acc :|> a)
 
+-- | Like 'repeatP' but ensures at least 1
 repeat1P :: Monad m => ParserT e m a -> ParserT e m (Seq a)
 repeat1P p = liftA2 (:<|) p (repeatP p)
 
+-- | Like 'spaceP' but ensures at least 1 space removed
 space1P :: Monad m => ParserT e m ()
 space1P = void (dropWhile1P isSpace)
 
+-- | Like 'stripP' but ensures at least 1 space removed
 strip1P :: Monad m => ParserT e m a -> ParserT e m a
 strip1P p = space1P *> p <* space1P
 
+-- | Like 'stripStartP' but ensures at least 1 space removed
 stripStart1P :: Monad m => ParserT e m a -> ParserT e m a
 stripStart1P p = space1P *> p
 
+-- | Like 'stripEndP' but ensures at least 1 space removed
 stripEnd1P :: Monad m => ParserT e m a -> ParserT e m a
 stripEnd1P p = p <* space1P
 
+-- | Like 'sepByP' but ensures at least 1 element
 sepBy1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 sepBy1P px pa = liftA2 (:<|) pa (fmap (fromMaybe Empty) (optP (px *> sepByP px pa)))
 
+-- | Like 'sepBy1P' but ensures at least 2 elements (i.e. there was a delimiter)
 sepBy2P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 sepBy2P px pa = liftA2 (:<|) (pa <* px) (sepBy1P px pa)
 
+-- | Implement this to format custom errors. The list will be joined with `unlines`.
 class HasErrMessage e where
   getErrMessage :: e -> [Text]
 
 instance HasErrMessage Void where
   getErrMessage = absurd
 
+-- private
 indent :: Int -> [Text] -> [Text]
 indent i = let s = T.replicate (2 * i) " " in fmap (s <>)
 
@@ -846,6 +914,7 @@ instance HasErrMessage e => HasErrMessage (Err e) where
           ReasonEmpty -> ["No parse results"]
     in  pos : body
 
+-- | Create 'Errata' formatting a parse error
 errataE :: HasErrMessage e => FilePath -> (Int -> (E.Line, E.Column)) -> Err e -> [E.Errata]
 errataE fp mkP e =
   let (line, col) = mkP (rangeStart (errRange e))
@@ -853,11 +922,13 @@ errataE fp mkP e =
       block = E.blockSimple E.basicStyle E.basicPointer fp Nothing (line, col, col + 1, Nothing) (Just (T.unlines msg))
   in  [E.Errata Nothing [block] Nothing]
 
+-- | Render a formatted error to text
 renderE :: HasErrMessage e => FilePath -> Text -> Err e -> Text
 renderE fp h e =
   let ov = mkOffsetVec h
       mkP = if V.null ov then const (1, 1) else \i -> let (!l, !c) = ov V.! min i (V.length ov - 1) in (l + 1, c + 1)
   in  TL.toStrict (E.prettyErrors h (errataE fp mkP e))
 
+-- | Print a formatted error to stderr
 printE :: HasErrMessage e => FilePath -> Text -> Err e -> IO ()
 printE fp h e = TIO.hPutStrLn stderr (renderE fp h e)
