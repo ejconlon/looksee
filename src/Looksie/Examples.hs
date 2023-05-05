@@ -14,9 +14,9 @@ import Data.Sequence (Seq)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void)
-import Looksie (Parser, altP, betweenP, expectP, greedy1P, infixRP, labelP, sepByP, stripP, takeWhile1P, takeWhileP)
+import Looksie (Parser, altP, betweenP, decP, doubleStrP, expectP, greedy1P, infixRP, labelP, sepByP, stripP, takeWhile1P)
 
-data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObject !(Seq (Text, Value))
+data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObject !(Seq (Text, Value)) | ValueNum !Rational
   deriving stock (Eq, Ord, Show)
 
 jsonParser :: Parser Void Value
@@ -29,13 +29,14 @@ jsonParser = valP
       , labelP "str" strP
       , labelP "array" arrayP
       , labelP "object" objectP
+      , labelP "num" numP
       ]
+  numP = ValueNum <$> decP
   nullP = ValueNull <$ expectP "null"
-  rawStrP = betweenP (expectP "\"") (expectP "\"") (takeWhileP (/= '"'))
-  strP = ValueString <$> rawStrP
+  strP = ValueString <$> doubleStrP
   arrayP = ValueArray <$> betweenP (expectP "[") (expectP "]") (sepByP (expectP ",") valP)
   rawPairP = do
-    s <- rawStrP
+    s <- doubleStrP
     stripP (expectP ":")
     v <- rawValP
     pure (s, v)

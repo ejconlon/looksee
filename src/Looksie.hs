@@ -28,14 +28,15 @@ module Looksie
   , lookP
   , labelP
   , expectP
-  , searchNearP
-  , searchFarP
-  , searchAllP
-  , searchAll1P
-  , searchLeadP
-  , searchLead1P
-  , searchTrailP
-  , searchTrail1P
+  , splitNearP
+  , splitFarP
+  , splitAllP
+  , splitAll1P
+  , splitAll2P
+  , leadP
+  , lead1P
+  , trailP
+  , trail1P
   , infixRP
   , infixLP
   , takeP
@@ -71,6 +72,11 @@ module Looksie
   , stripEnd1P
   , sepBy1P
   , sepBy2P
+  , scopeP
+  , iterP
+  , strP
+  , doubleStrP
+  , singleStrP
   , HasErrMessage (..)
   , errataE
   , renderE
@@ -85,7 +91,7 @@ import Control.Monad.Except (ExceptT, MonadError (..), runExceptT)
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.Identity (Identity (..))
 import Control.Monad.Reader (MonadReader (..))
-import Control.Monad.State.Strict (MonadState (..), StateT (..), gets, modify', state)
+import Control.Monad.State.Strict (MonadState (..), StateT (..), evalStateT, gets, modify', state)
 import Control.Monad.Trans (MonadTrans (..))
 import Control.Monad.Writer.Strict (MonadWriter (..))
 import Data.Bifoldable (Bifoldable (..))
@@ -415,14 +421,14 @@ expectP n = do
     then pure ()
     else errP (ReasonExpect n o)
 
-searchNearP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
-searchNearP px pa = fmap (\(x, a, _) -> (x, a)) (infixRP px pa (pure ()))
+splitNearP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
+splitNearP px pa = fmap (\(x, a, _) -> (x, a)) (infixRP px pa (pure ()))
 
-searchFarP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
-searchFarP px pa = fmap (\(x, a, _) -> (x, a)) (infixLP px pa (pure ()))
+splitFarP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
+splitFarP px pa = fmap (\(x, a, _) -> (x, a)) (infixLP px pa (pure ()))
 
-searchAllP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-searchAllP px pa = go
+splitAllP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+splitAllP px pa = go
  where
   go = do
     maas <- optInfixRP px pa go
@@ -430,8 +436,8 @@ searchAllP px pa = go
       Nothing -> fmap (maybe Empty Seq.singleton) (optP pa)
       Just (_, a, as) -> pure (a :<| as)
 
-searchAll1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-searchAll1P px pa = go
+splitAll1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+splitAll1P px pa = go
  where
   go = do
     maas <- optInfixRP px pa go
@@ -439,25 +445,28 @@ searchAll1P px pa = go
       Nothing -> fmap Seq.singleton pa
       Just (_, a, as) -> pure (a :<| as)
 
-searchLeadP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-searchLeadP px pa = do
+splitAll2P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+splitAll2P px pa = liftA2 (:<|) (pa <* px) (splitAll1P px pa)
+
+leadP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+leadP px pa = do
   mu <- optP px
   case mu of
     Nothing -> pure Empty
-    Just _ -> searchAll1P px pa
+    Just _ -> splitAll1P px pa
 
-searchLead1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-searchLead1P px pa = px *> searchAll1P px pa
+lead1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+lead1P px pa = px *> splitAll1P px pa
 
-searchTrailP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-searchTrailP px pa = do
-  as <- searchAllP px pa
+trailP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+trailP px pa = do
+  as <- splitAllP px pa
   case as of
     Empty -> pure Empty
     _ -> as <$ px
 
-searchTrail1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-searchTrail1P px pa = searchAll1P px pa <* px
+trail1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+trail1P px pa = splitAll1P px pa <* px
 
 moveStFwd :: St -> Maybe St
 moveStFwd st =
@@ -652,30 +661,44 @@ dropAllP = fmap T.length takeAllP
 dropAll1P :: Monad m => ParserT e m Int
 dropAll1P = fmap T.length takeAll1P
 
--- TODO Add "fold" for string literal parsing
+scopeP :: Monad m => s -> ParserT e (StateT s m) a -> ParserT e m a
+scopeP s0 p = ParserT $ \j -> do
+  st0 <- get
+  (ea, st1) <- lift (evalStateT (runT (runParserT p) st0) s0)
+  put st1
+  j ea
 
--- data Step e a = StepErr !e | StepDone !a | StepEmpty | StepCont
---   deriving stock (Eq, Ord, Show)
+iterP :: ParserT e m (Maybe a) -> ParserT e m a
+iterP p = go
+ where
+  go = p >>= maybe go pure
 
--- data Res e a = ResErr !e | ResDone !a | ResEmpty
---   deriving stock (Eq, Ord, Show)
+data StrState = StrState !Bool !(Seq Char)
 
--- foldRes :: (s -> Maybe Char -> (Step e a, s)) -> Text -> (Res e a, Int, Text)
--- foldRes = undefined
+strP :: Monad m => Char -> ParserT e m Text
+strP d = do
+  expectP (T.singleton d)
+  scopeP (StrState False Empty) $ iterP $ do
+    c <- headP
+    state $ \ss@(StrState esc buf) ->
+      if c == d
+        then
+          if esc
+            then (Nothing, StrState False (buf :|> c))
+            else (Just (T.pack (toList buf)), ss)
+        else
+          if c == '\\'
+            then
+              if esc
+                then (Nothing, StrState False (buf :|> c))
+                else (Nothing, StrState True buf)
+            else (Nothing, StrState False (buf :|> c))
 
--- foldP :: Monad m => (s -> Maybe Char -> (Step e a, s)) -> s -> ParserT e m a
--- foldP f = ParserT $ \st j -> do
---   let (res, newEnd, newHay) = foldRes f (stHay st)
---   undefined
+doubleStrP :: Monad m => ParserT e m Text
+doubleStrP = strP '"'
 
--- strP :: Monad m => Char -> ParserT e m Text
--- strP = undefined
-
--- doubleStrP :: Monad m => ParserT e m Text
--- doubleStrP = undefined
-
--- singleStrP :: Monad m => ParserT e m Text
--- singleStrP = undefined
+singleStrP :: Monad m => ParserT e m Text
+singleStrP = strP '\''
 
 betweenP :: ParserT e m x -> ParserT e m y -> ParserT e m a -> ParserT e m a
 betweenP px py pa = px *> pa <* py
@@ -809,7 +832,7 @@ instance HasErrMessage e => HasErrMessage (Err e) where
                   "Tried:" : indent 1 (getErrMessage e)
             in  hd : tl
           ReasonInfix errs ->
-            let hd = "Infix/search failed:"
+            let hd = "Infix/split failed:"
                 tl = indent 1 $ do
                   (i, _, e) <- toList errs
                   let x = "Tried position: " <> T.pack (show i)
