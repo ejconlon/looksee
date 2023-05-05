@@ -487,46 +487,50 @@ subInfixP
   -> St
   -> Seq (Int, InfixPhase, Err e)
   -> T e m r
-subInfixP = undefined
-
--- subInfixP mov px pa pb j st0 = goTry
---  where
---   goTry errs = do
---     (exl, _) <- get >>= runParserT (measureP px)
---     case exl of
---       Left _ -> goNext errs stStart
---       Right (x, lenX) -> do
---         let rng0 = stRange st0
---             srt0 = rangeStart rng0
---             hay0 = stHay st0
---             endA = rangeStart (stRange stStart)
---             lenA = endA - srt0
---             rngA = rng0 {rangeEnd = endA}
---             hayA = T.take lenA hay0
---             stA = st0 {stHay = hayA, stRange = rngA}
---             hayB = T.drop (lenA + lenX) hay0
---             srtB = endA + lenX
---             rngB = rng0 {rangeStart = srtB}
---             stB = st0 {stHay = hayB, stRange = rngB}
---         (ea, _) <- runParserT (pa <* endP) stA
---         case ea of
---           Left errA -> goNext (errs :|> (endA, InfixPhaseLeft, errA)) stStart
---           Right a -> do
---             (eb, stC) <- runParserT pb stB
---             case eb of
---               Left errB -> goNext (errs :|> (endA, InfixPhaseRight, errB)) stStart
---               Right b -> do
---                 q@(ec, _) <- j stC (Right (Just (x, a, b)))
---                 case ec of
---                   Left errC -> goNext (errs :|> (endA, InfixPhaseCont, errC)) stStart
---                   Right _ -> pure q
---   goNext !errs stStart =
---     case mov stStart of
---       Nothing ->
---         case errs of
---           Empty -> j st0 (Right Nothing)
---           _ -> j st0 (Left (Err (ErrF (stRange st0) (ReasonInfix errs))))
---       Just stNext -> goTry errs stNext
+subInfixP mov px pa pb j st0 = goTry
+ where
+  goTry errs = do
+    stStart <- get
+    exl <- tryT (runParserT (measureP px))
+    case exl of
+      Left _ -> goNext errs stStart
+      Right (x, lenX) -> do
+        let rng0 = stRange st0
+            srt0 = rangeStart rng0
+            hay0 = stHay st0
+            endA = rangeStart (stRange stStart)
+            lenA = endA - srt0
+            rngA = rng0 {rangeEnd = endA}
+            hayA = T.take lenA hay0
+            stA = st0 {stHay = hayA, stRange = rngA}
+            hayB = T.drop (lenA + lenX) hay0
+            srtB = endA + lenX
+            rngB = rng0 {rangeStart = srtB}
+            stB = st0 {stHay = hayB, stRange = rngB}
+        put stA
+        ea <- tryT (runParserT (pa <* endP))
+        case ea of
+          Left errA -> goNext (errs :|> (endA, InfixPhaseLeft, errA)) stStart
+          Right a -> do
+            put stB
+            eb <- tryT (runParserT pb)
+            case eb of
+              Left errB -> goNext (errs :|> (endA, InfixPhaseRight, errB)) stStart
+              Right b -> do
+                ec <- tryT (j (Right (Just (x, a, b))))
+                case ec of
+                  Left errC -> goNext (errs :|> (endA, InfixPhaseCont, errC)) stStart
+                  Right c -> pure c
+  goNext !errs stStart =
+    case mov stStart of
+      Nothing -> do
+        put st0
+        case errs of
+          Empty -> j (Right Nothing)
+          _ -> j (Left (Err (ErrF (stRange st0) (ReasonInfix errs))))
+      Just stNext -> do
+        put stNext
+        goTry errs
 
 -- private
 optInfixRP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (x, a, b))
