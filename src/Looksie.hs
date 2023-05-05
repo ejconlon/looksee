@@ -80,13 +80,14 @@ where
 
 import Control.Applicative (Alternative (..), liftA2)
 import Control.Exception (Exception)
-import Control.Monad (ap, void)
+import Control.Monad (ap, void, (>=>))
+import Control.Monad.Except (ExceptT, MonadError (..), runExceptT)
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.Identity (Identity (..))
 import Control.Monad.Reader (MonadReader (..))
-import Control.Monad.State.Strict (MonadState (..))
+import Control.Monad.State.Strict (MonadState (..), StateT (..), gets, modify', state)
 import Control.Monad.Trans (MonadTrans (..))
-import Control.Monad.Writer.Strict (MonadWriter (..))
+-- import Control.Monad.Writer.Strict (MonadWriter (..))
 import Data.Bifoldable (Bifoldable (..))
 import Data.Bifunctor (Bifunctor (..))
 import Data.Bifunctor.TH (deriveBifoldable, deriveBifunctor, deriveBitraversable)
@@ -214,19 +215,38 @@ errRange = efRange . unErr
 errReason :: Err e -> Reason e (Err e)
 errReason = efReason . unErr
 
+newtype T e m a = T {unT :: ExceptT (Err e) (StateT St m) a}
+  deriving newtype (Functor, Applicative, Monad, MonadState St, MonadError (Err e))
+
+instance MonadTrans (T e) where
+  lift = T . lift . lift
+
+runT :: T e m a -> St -> m (Either (Err e) a, St)
+runT = runStateT . runExceptT . unT
+
+mkErrT :: Monad m => Reason e (Err e) -> T e m (Err e)
+mkErrT re = gets stRange >>= \ra -> throwError (Err (ErrF ra re))
+
+errT :: Monad m => Reason e (Err e) -> T e m a
+errT = mkErrT >=> throwError
+
+tryT :: Monad m => T e m r -> T e m (Either (Err e) r)
+tryT t = get >>= \st -> lift (runT t st) >>= \(er, st') -> er <$ put st'
+
 -- | The parser monad transformer
-newtype ParserT e m a = ParserT {unParserT :: forall r. St -> (St -> Either (Err e) a -> m (Either (Err e) r, St)) -> m (Either (Err e) r, St)}
+-- This is essentially `Codensity (T e m) (Either (Err e) a)`
+newtype ParserT e m a = ParserT {unParserT :: forall r. (Either (Err e) a -> T e m r) -> T e m r}
 
 instance Functor (ParserT e m) where
-  fmap f (ParserT g) = ParserT (\st j -> g st (\st' -> j st' . fmap f))
+  fmap f (ParserT g) = ParserT (\j -> g (j . fmap f))
 
 instance Applicative (ParserT e m) where
-  pure a = ParserT (\st j -> j st (Right a))
+  pure a = ParserT (\j -> j (Right a))
   (<*>) = ap
 
 instance Monad (ParserT e m) where
   return = pure
-  ParserT g >>= f = ParserT (\st j -> g st (\st' -> \case Left e -> j st' (Left e); Right a -> let ParserT h = f a in h st' j))
+  ParserT g >>= f = ParserT (\j -> g (\case Left e -> j (Left e); Right a -> let ParserT h = f a in h j))
 
 instance Monad m => Alternative (ParserT e m) where
   empty = emptyP
@@ -237,72 +257,76 @@ instance Monad m => Alternative (ParserT e m) where
 -- | The parser monad
 type Parser e = ParserT e Identity
 
-instance MonadFail (ParserT e m) where
-  fail = errP . ReasonFail . T.pack
-
 instance MonadTrans (ParserT e) where
-  lift ma = ParserT (\st j -> ma >>= j st . Right)
-
-instance MonadReader r m => MonadReader r (ParserT e m) where
-  ask = lift ask
-  local f (ParserT g) = ParserT (\st j -> local f (g st j))
-
-instance MonadWriter w m => MonadWriter w (ParserT e m) where
-  writer = lift . writer
-  tell = lift . tell
-  listen (ParserT g) = ParserT $ \st j -> do
-    ((ea, st'), w) <- listen (g st (\st' ea -> pure (ea, st')))
-    j st' (fmap (,w) ea)
-  pass (ParserT g) = ParserT $ \st j -> do
-    (ea, st') <- pass (fmap helpPass (g st (\st' eaww -> pure (eaww, st'))))
-    j st' ea
-
-helpPass :: (Either (Err e) (a, w -> w), St) -> ((Either (Err e) a, St), w -> w)
-helpPass (eaww, st') = either (\e -> ((Left e, st'), id)) (\(a, ww) -> ((Right a, st'), ww)) eaww
+  lift ma = ParserT (\j -> lift ma >>= j . Right)
 
 instance MonadIO m => MonadIO (ParserT e m) where
   liftIO = lift . liftIO
 
-instance MonadState s m => MonadState s (ParserT e m) where
-  get = lift get
-  put = lift . put
-  state = lift . state
+instance Monad m => MonadFail (ParserT e m) where
+  fail = errP . ReasonFail . T.pack
+
+-- TODO add
+-- instance MonadReader r m => MonadReader r (ParserT e m) where
+--   ask = lift ask
+--   local f (ParserT g) = ParserT (local f . g)
+
+-- TODO not sure about this instance
+-- instance MonadWriter w m => MonadWriter w (ParserT e m) where
+--   writer = lift . writer
+--   tell = lift . tell
+--   listen (ParserT g) = ParserT $ \j -> do
+--     (ea, w) <- listen g
+--     j (fmap (,w) ea)
+--   pass (ParserT g) = ParserT $ \j -> do
+--     ea <- pass (fmap helpPass g)
+--     j ea
+
+-- helpPass :: (Either (Err e) (a, w -> w), St) -> ((Either (Err e) a, St), w -> w)
+-- helpPass (eaww, st') = either (\e -> ((Left e, st'), id)) (\(a, ww) -> ((Right a, st'), ww)) eaww
+
+-- TODO not sure about this instance
+-- instance MonadState s m => MonadState s (ParserT e m) where
+--   get = lift get
+--   put = lift . put
+--   state = lift . state
 
 -- private
-runParserT :: Applicative m => ParserT e m a -> St -> m (Either (Err e) a, St)
-runParserT (ParserT g) st = g st (\st' ea -> pure (ea, st'))
+-- This is essentially 'lowerCodensity'
+runParserT :: Monad m => ParserT e m a -> T e m a
+runParserT (ParserT g) = g (either throwError pure)
 
 -- private
-getP :: ParserT e m St
-getP = ParserT (\st j -> j st (Right st))
+getP :: Monad m => ParserT e m St
+getP = ParserT (\j -> get >>= j . Right)
 
 -- private
-getsP :: (St -> a) -> ParserT e m a
-getsP f = ParserT (\st j -> j st (Right (f st)))
+getsP :: Monad m => (St -> a) -> ParserT e m a
+getsP f = ParserT (\j -> gets f >>= j . Right)
 
 -- private
-putP :: St -> ParserT e m ()
-putP st = ParserT (\_ j -> j st (Right ()))
+putP :: Monad m => St -> ParserT e m ()
+putP st = ParserT (\j -> put st >>= j . Right)
 
 -- private
-stateP :: (St -> (a, St)) -> ParserT e m a
-stateP f = ParserT (\st j -> let (a, st') = f st in j st' (Right a))
+stateP :: Monad m => (St -> (a, St)) -> ParserT e m a
+stateP f = ParserT (\j -> state f >>= j . Right)
 
 -- private
-modifyP :: (St -> St) -> ParserT e m ()
-modifyP f = ParserT (\st j -> j (f st) (Right ()))
+modifyP :: Monad m => (St -> St) -> ParserT e m ()
+modifyP f = ParserT (\j -> modify' f >>= j . Right)
 
 -- private
-errP :: Reason e (Err e) -> ParserT e m a
-errP re = ParserT (\st j -> j st (Left (Err (ErrF (stRange st) re))))
+errP :: Monad m => Reason e (Err e) -> ParserT e m a
+errP re = ParserT (\j -> mkErrT re >>= j . Left)
 
 -- private
-leftoverP :: ParserT e m Int
+leftoverP :: Monad m => ParserT e m Int
 leftoverP = getsP (\st -> let Range s e = stRange st in e - s)
 
 -- | Run a parser transformer
-parseT :: Applicative m => ParserT e m a -> Text -> m (Either (Err e) a)
-parseT p h = fmap fst (runParserT (p <* endP) (St h (range h)))
+parseT :: Monad m => ParserT e m a -> Text -> m (Either (Err e) a)
+parseT p h = fmap fst (runT (runParserT (p <* endP)) (St h (range h)))
 
 -- | Run a parser
 parse :: Parser e a -> Text -> Either (Err e) a
@@ -318,11 +342,11 @@ parseI p h = do
   pure ea
 
 -- | Throw a custom parse error
-throwP :: e -> ParserT e m a
+throwP :: Monad m => e -> ParserT e m a
 throwP = errP . ReasonCustom
 
 -- | Succeed if this is the end of input
-endP :: ParserT e m ()
+endP :: Monad m => ParserT e m ()
 endP = do
   l <- leftoverP
   if l == 0
@@ -330,38 +354,43 @@ endP = do
     else errP (ReasonLeftover l)
 
 -- | Makes parse success optional
-optP :: ParserT e m a -> ParserT e m (Maybe a)
-optP (ParserT g) = ParserT $ \st0 j ->
-  g st0 $ \st1 ea ->
-    case ea of
-      Left _ -> j st0 (Right Nothing)
-      Right a -> j st1 (Right (Just a))
+optP :: Monad m => ParserT e m a -> ParserT e m (Maybe a)
+optP (ParserT g) = ParserT $ \j -> do
+  st0 <- get
+  g $ \case
+    Left _ -> put st0 *> j (Right Nothing)
+    Right a -> j (Right (Just a))
 
 -- private
-subAltP :: Monad m => St -> (St -> Either (Err e) a -> m (Either (Err e) r, St)) -> Seq (AltPhase, Err e) -> [ParserT e m a] -> m (Either (Err e) r, St)
-subAltP st0 j = go
+subAltP
+  :: Monad m
+  => (Either (Err e) a -> T e m r)
+  -> St
+  -> Seq (AltPhase, Err e)
+  -> [ParserT e m a]
+  -> T e m r
+subAltP j st0 = go
  where
   go !errs = \case
-    [] -> j st0 (Left (Err (ErrF (stRange st0) (ReasonAlt errs))))
-    p : rest -> unParserT p st0 $ \st1 er ->
-      case er of
-        Left err -> go (errs :|> (AltPhaseBranch, err)) rest
-        Right r -> do
-          q@(es, _) <- j st1 (Right r)
-          case es of
-            Left err -> go (errs :|> (AltPhaseCont, err)) rest
-            Right _ -> pure q
+    [] -> put st0 *> mkErrT (ReasonAlt errs) >>= j . Left
+    ParserT g : rest -> do
+      es <- g $ \case
+        Left err -> pure (Left (AltPhaseBranch, err))
+        Right r -> fmap (first (AltPhaseCont,)) (tryT (j (Right r)))
+      case es of
+        Left e -> put st0 *> go (errs :|> e) rest
+        Right s -> pure s
 
 -- | Parse with many possible branches
 altP :: (Monad m, Foldable f) => f (ParserT e m a) -> ParserT e m a
-altP falts = ParserT (\st0 j -> subAltP st0 j Empty (toList falts))
+altP falts = ParserT (\j -> get >>= \st -> subAltP j st Empty (toList falts))
 
 -- | Fail with no results
-emptyP :: ParserT e m a
-emptyP = ParserT (\st j -> j st (Left (Err (ErrF (stRange st) ReasonEmpty))))
+emptyP :: Monad m => ParserT e m a
+emptyP = ParserT (\j -> get >>= \st -> j (Left (Err (ErrF (stRange st) ReasonEmpty))))
 
 -- | Parse repeatedly until the parser fails
-greedyP :: ParserT e m a -> ParserT e m (Seq a)
+greedyP :: Monad m => ParserT e m a -> ParserT e m (Seq a)
 greedyP p = go Empty
  where
   go !acc = do
@@ -371,21 +400,20 @@ greedyP p = go Empty
       Just a -> go (acc :|> a)
 
 -- | Same as 'greedyP' but ensure at least one result
-greedy1P :: ParserT e m a -> ParserT e m (Seq a)
+greedy1P :: Monad m => ParserT e m a -> ParserT e m (Seq a)
 greedy1P p = liftA2 (:<|) p (greedyP p)
 
 -- | Lookahead - rewinds state if the parser succeeds, otherwise throws error
-lookP :: ParserT e m a -> ParserT e m a
-lookP (ParserT g) = ParserT (\st0 j -> g st0 (const (j st0)))
+lookP :: Monad m => ParserT e m a -> ParserT e m a
+lookP (ParserT g) = ParserT (\j -> get >>= \st -> g (\ea -> put st *> j ea))
 
 -- | Labels parse errors
-labelP :: Label -> ParserT e m a -> ParserT e m a
-labelP lab (ParserT g) = ParserT $ \st j -> g st $ \st' ea ->
-  j st' $ case ea of
-    Left e -> Left (Err (ErrF (stRange st) (ReasonLabeled lab e)))
-    Right a -> Right a
+labelP :: Monad m => Label -> ParserT e m a -> ParserT e m a
+labelP lab (ParserT g) = ParserT $ \j -> g $ \case
+  Left e -> mkErrT (ReasonLabeled lab e) >>= j . Left
+  Right a -> j (Right a)
 
-expectP :: Text -> ParserT e m ()
+expectP :: Monad m => Text -> ParserT e m ()
 expectP n = do
   o <- takeP (T.length n)
   if n == o
@@ -457,68 +485,87 @@ moveStBwd st0 st =
         then Nothing
         else Just (St {stRange = Range (s - 1) e, stHay = T.drop (s - 1) hay0})
 
-subInfixP :: Monad m => (St -> Maybe St) -> ParserT e m x -> ParserT e m a -> ParserT e m b -> St -> (St -> Either (Err e) (Maybe (x, a, b)) -> m (Either (Err e) r, St)) -> Seq (Int, InfixPhase, Err e) -> St -> m (Either (Err e) r, St)
-subInfixP mov px pa pb st0 j = goTry
- where
-  goTry errs stStart = do
-    (exl, _) <- runParserT (measureP px) stStart
-    case exl of
-      Left _ -> goNext errs stStart
-      Right (x, lenX) -> do
-        let rng0 = stRange st0
-            srt0 = rangeStart rng0
-            hay0 = stHay st0
-            endA = rangeStart (stRange stStart)
-            lenA = endA - srt0
-            rngA = rng0 {rangeEnd = endA}
-            hayA = T.take lenA hay0
-            stA = st0 {stHay = hayA, stRange = rngA}
-            hayB = T.drop (lenA + lenX) hay0
-            srtB = endA + lenX
-            rngB = rng0 {rangeStart = srtB}
-            stB = st0 {stHay = hayB, stRange = rngB}
-        (ea, _) <- runParserT (pa <* endP) stA
-        case ea of
-          Left errA -> goNext (errs :|> (endA, InfixPhaseLeft, errA)) stStart
-          Right a -> do
-            (eb, stC) <- runParserT pb stB
-            case eb of
-              Left errB -> goNext (errs :|> (endA, InfixPhaseRight, errB)) stStart
-              Right b -> do
-                q@(ec, _) <- j stC (Right (Just (x, a, b)))
-                case ec of
-                  Left errC -> goNext (errs :|> (endA, InfixPhaseCont, errC)) stStart
-                  Right _ -> pure q
-  goNext !errs stStart =
-    case mov stStart of
-      Nothing ->
-        case errs of
-          Empty -> j st0 (Right Nothing)
-          _ -> j st0 (Left (Err (ErrF (stRange st0) (ReasonInfix errs))))
-      Just stNext -> goTry errs stNext
+subInfixP
+  :: Monad m
+  => (St -> Maybe St)
+  -> ParserT e m x
+  -> ParserT e m a
+  -> ParserT e m b
+  -> (Either (Err e) (Maybe (x, a, b)) -> T e m r)
+  -> St
+  -> Seq (Int, InfixPhase, Err e)
+  -> T e m r
+subInfixP = undefined
+
+-- subInfixP mov px pa pb j st0 = goTry
+--  where
+--   goTry errs = do
+--     (exl, _) <- get >>= runParserT (measureP px)
+--     case exl of
+--       Left _ -> goNext errs stStart
+--       Right (x, lenX) -> do
+--         let rng0 = stRange st0
+--             srt0 = rangeStart rng0
+--             hay0 = stHay st0
+--             endA = rangeStart (stRange stStart)
+--             lenA = endA - srt0
+--             rngA = rng0 {rangeEnd = endA}
+--             hayA = T.take lenA hay0
+--             stA = st0 {stHay = hayA, stRange = rngA}
+--             hayB = T.drop (lenA + lenX) hay0
+--             srtB = endA + lenX
+--             rngB = rng0 {rangeStart = srtB}
+--             stB = st0 {stHay = hayB, stRange = rngB}
+--         (ea, _) <- runParserT (pa <* endP) stA
+--         case ea of
+--           Left errA -> goNext (errs :|> (endA, InfixPhaseLeft, errA)) stStart
+--           Right a -> do
+--             (eb, stC) <- runParserT pb stB
+--             case eb of
+--               Left errB -> goNext (errs :|> (endA, InfixPhaseRight, errB)) stStart
+--               Right b -> do
+--                 q@(ec, _) <- j stC (Right (Just (x, a, b)))
+--                 case ec of
+--                   Left errC -> goNext (errs :|> (endA, InfixPhaseCont, errC)) stStart
+--                   Right _ -> pure q
+--   goNext !errs stStart =
+--     case mov stStart of
+--       Nothing ->
+--         case errs of
+--           Empty -> j st0 (Right Nothing)
+--           _ -> j st0 (Left (Err (ErrF (stRange st0) (ReasonInfix errs))))
+--       Just stNext -> goTry errs stNext
 
 -- private
 optInfixRP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (x, a, b))
-optInfixRP px pa pb = ParserT (\st0 j -> subInfixP moveStFwd px pa pb st0 j Empty st0)
+optInfixRP px pa pb = ParserT (\j -> get >>= \st0 -> subInfixP moveStFwd px pa pb j st0 Empty)
 
 -- private
-requireInfix :: (St -> Either (Err e) (x, a, b) -> m (r, St)) -> (St -> Either (Err e) (Maybe (x, a, b)) -> m (r, St))
-requireInfix j st = \case
+requireInfix
+  :: Monad m
+  => (Either (Err e) (x, a, b) -> T e m r)
+  -> (Either (Err e) (Maybe (x, a, b)) -> T e m r)
+requireInfix j = \case
   Right mxab ->
     case mxab of
-      Nothing -> j st (Left (Err (ErrF (stRange st) ReasonEmpty)))
-      Just xab -> j st (Right xab)
-  Left e -> j st (Left e)
+      Nothing -> mkErrT ReasonEmpty >>= j . Left
+      Just xab -> j (Right xab)
+  Left e -> j (Left e)
 
 -- | Right-associative infix parsing. Searches for the operator from START to END of range.
 infixRP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m b -> ParserT e m (x, a, b)
-infixRP px pa pb = ParserT (\st0 j -> subInfixP moveStFwd px pa pb st0 (requireInfix j) Empty st0)
+infixRP px pa pb = ParserT $ \j -> do
+  st0 <- get
+  subInfixP moveStFwd px pa pb (requireInfix j) st0 Empty
 
 -- | Left-associative infix parsing. Searches for the operator from END to START of range.
 infixLP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m b -> ParserT e m (x, a, b)
-infixLP px pa pb = ParserT (\st0 j -> subInfixP (moveStBwd st0) px pa pb st0 (requireInfix j) Empty (initStBwd st0))
+infixLP px pa pb = ParserT $ \j -> do
+  st0 <- get
+  put (initStBwd st0)
+  subInfixP (moveStBwd st0) px pa pb (requireInfix j) st0 Empty
 
-takeP :: Int -> ParserT e m Text
+takeP :: Monad m => Int -> ParserT e m Text
 takeP i = stateP $ \st ->
   let h = stHay st
       (o, h') = T.splitAt i h
@@ -528,7 +575,7 @@ takeP i = stateP $ \st ->
       st' = st {stHay = h', stRange = r'}
   in  (o, st')
 
-takeExactP :: Int -> ParserT e m Text
+takeExactP :: Monad m => Int -> ParserT e m Text
 takeExactP i = do
   et <- stateP $ \st ->
     let h = stHay st
@@ -542,13 +589,13 @@ takeExactP i = do
     Left l -> errP (ReasonDemand i l)
     Right a -> pure a
 
-dropP :: Int -> ParserT e m Int
+dropP :: Monad m => Int -> ParserT e m Int
 dropP = fmap T.length . takeP
 
-dropExactP :: Int -> ParserT e m ()
+dropExactP :: Monad m => Int -> ParserT e m ()
 dropExactP = void . takeExactP
 
-takeWhileP :: (Char -> Bool) -> ParserT e m Text
+takeWhileP :: Monad m => (Char -> Bool) -> ParserT e m Text
 takeWhileP f = stateP $ \st ->
   let h = stHay st
       o = T.takeWhile f h
@@ -559,7 +606,7 @@ takeWhileP f = stateP $ \st ->
       st' = st {stHay = h', stRange = r'}
   in  (o, st')
 
-takeWhile1P :: (Char -> Bool) -> ParserT e m Text
+takeWhile1P :: Monad m => (Char -> Bool) -> ParserT e m Text
 takeWhile1P f = do
   mt <- stateP $ \st ->
     let h = stHay st
@@ -574,13 +621,13 @@ takeWhile1P f = do
     Nothing -> errP (ReasonDemand 1 0)
     Just a -> pure a
 
-dropWhileP :: (Char -> Bool) -> ParserT e m Int
+dropWhileP :: Monad m => (Char -> Bool) -> ParserT e m Int
 dropWhileP = fmap T.length . takeWhileP
 
-dropWhile1P :: (Char -> Bool) -> ParserT e m Int
+dropWhile1P :: Monad m => (Char -> Bool) -> ParserT e m Int
 dropWhile1P = fmap T.length . takeWhile1P
 
-takeAllP :: ParserT e m Text
+takeAllP :: Monad m => ParserT e m Text
 takeAllP = stateP $ \st ->
   let h = stHay st
       r = stRange st
@@ -588,7 +635,7 @@ takeAllP = stateP $ \st ->
       st' = st {stHay = T.empty, stRange = r'}
   in  (h, st')
 
-takeAll1P :: ParserT e m Text
+takeAll1P :: Monad m => ParserT e m Text
 takeAll1P = do
   mt <- stateP $ \st ->
     let h = stHay st
@@ -600,39 +647,41 @@ takeAll1P = do
     Nothing -> errP (ReasonDemand 1 0)
     Just a -> pure a
 
-dropAllP :: ParserT e m Int
+dropAllP :: Monad m => ParserT e m Int
 dropAllP = fmap T.length takeAllP
 
-dropAll1P :: ParserT e m Int
+dropAll1P :: Monad m => ParserT e m Int
 dropAll1P = fmap T.length takeAll1P
 
-data Step e a = StepErr !e | StepDone !a | StepEmpty | StepCont
-  deriving stock (Eq, Ord, Show)
+-- TODO Add "fold" for string literal parsing
 
-data Res e a = ResErr !e | ResDone !a | ResEmpty
-  deriving stock (Eq, Ord, Show)
+-- data Step e a = StepErr !e | StepDone !a | StepEmpty | StepCont
+--   deriving stock (Eq, Ord, Show)
+
+-- data Res e a = ResErr !e | ResDone !a | ResEmpty
+--   deriving stock (Eq, Ord, Show)
 
 -- foldRes :: (s -> Maybe Char -> (Step e a, s)) -> Text -> (Res e a, Int, Text)
 -- foldRes = undefined
 
--- foldP :: (s -> Maybe Char -> (Step e a, s)) -> ParserT e m a
+-- foldP :: Monad m => (s -> Maybe Char -> (Step e a, s)) -> s -> ParserT e m a
 -- foldP f = ParserT $ \st j -> do
 --   let (res, newEnd, newHay) = foldRes f (stHay st)
 --   undefined
 
-strP :: Char -> ParserT e m Text
-strP = undefined
+-- strP :: Monad m => Char -> ParserT e m Text
+-- strP = undefined
 
-doubleStrP :: ParserT e m Text
-doubleStrP = undefined
+-- doubleStrP :: Monad m => ParserT e m Text
+-- doubleStrP = undefined
 
-singleStrP :: ParserT e m Text
-singleStrP = undefined
+-- singleStrP :: Monad m => ParserT e m Text
+-- singleStrP = undefined
 
 betweenP :: ParserT e m x -> ParserT e m y -> ParserT e m a -> ParserT e m a
 betweenP px py pa = px *> pa <* py
 
-sepByP :: ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+sepByP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 sepByP c p = go
  where
   go = do
@@ -648,29 +697,29 @@ sepByP c p = go
         a <- p
         goNext (acc :|> a)
 
-spaceP :: ParserT e m ()
+spaceP :: Monad m => ParserT e m ()
 spaceP = void (dropWhileP isSpace)
 
-stripP :: ParserT e m a -> ParserT e m a
+stripP :: Monad m => ParserT e m a -> ParserT e m a
 stripP p = spaceP *> p <* spaceP
 
-stripStartP :: ParserT e m a -> ParserT e m a
+stripStartP :: Monad m => ParserT e m a -> ParserT e m a
 stripStartP p = spaceP *> p
 
-stripEndP :: ParserT e m a -> ParserT e m a
+stripEndP :: Monad m => ParserT e m a -> ParserT e m a
 stripEndP p = p <* spaceP
 
-measureP :: ParserT e m a -> ParserT e m (a, Int)
+measureP :: Monad m => ParserT e m a -> ParserT e m (a, Int)
 measureP p = do
   start <- getsP (rangeStart . stRange)
   a <- p
   end <- getsP (rangeStart . stRange)
   pure (a, end - start)
 
-headP :: ParserT e m Char
+headP :: Monad m => ParserT e m Char
 headP = fmap T.head (takeExactP 1)
 
-signedP :: Num a => ParserT e m a -> ParserT e m a
+signedP :: (Monad m, Num a) => ParserT e m a -> ParserT e m a
 signedP p = do
   ms <- optP (expectP "-")
   case ms of
@@ -701,7 +750,7 @@ udecP = do
       pure (whole + part)
     else pure whole
 
-repeatP :: ParserT e m a -> ParserT e m (Seq a)
+repeatP :: Monad m => ParserT e m a -> ParserT e m (Seq a)
 repeatP p = go Empty
  where
   go !acc = do
@@ -710,25 +759,25 @@ repeatP p = go Empty
       Nothing -> pure acc
       Just a -> go (acc :|> a)
 
-repeat1P :: ParserT e m a -> ParserT e m (Seq a)
+repeat1P :: Monad m => ParserT e m a -> ParserT e m (Seq a)
 repeat1P p = liftA2 (:<|) p (repeatP p)
 
-space1P :: ParserT e m ()
+space1P :: Monad m => ParserT e m ()
 space1P = void (dropWhile1P isSpace)
 
-strip1P :: ParserT e m a -> ParserT e m a
+strip1P :: Monad m => ParserT e m a -> ParserT e m a
 strip1P p = space1P *> p <* space1P
 
-stripStart1P :: ParserT e m a -> ParserT e m a
+stripStart1P :: Monad m => ParserT e m a -> ParserT e m a
 stripStart1P p = space1P *> p
 
-stripEnd1P :: ParserT e m a -> ParserT e m a
+stripEnd1P :: Monad m => ParserT e m a -> ParserT e m a
 stripEnd1P p = p <* space1P
 
-sepBy1P :: ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+sepBy1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 sepBy1P px pa = liftA2 (:<|) pa (fmap (fromMaybe Empty) (optP (px *> sepByP px pa)))
 
-sepBy2P :: ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
+sepBy2P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
 sepBy2P px pa = liftA2 (:<|) (pa <* px) (sepBy1P px pa)
 
 class HasErrMessage e where
