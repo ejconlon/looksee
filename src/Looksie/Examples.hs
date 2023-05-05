@@ -8,13 +8,13 @@ module Looksie.Examples
   )
 where
 
-import Data.Char (isAlpha)
+import Data.Char (intToDigit, isAlpha)
 import Data.Foldable (foldl')
 import Data.Sequence (Seq)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void)
-import Looksie (Parser, altP, betweenP, expectP, greedy1P, infixP, sepByP, stripP, takeWhile1P, takeWhileP)
+import Looksie (Parser, altP, betweenP, expectP, greedy1P, infixRP, labelP, sepByP, stripP, takeWhile1P, takeWhileP)
 
 data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObject !(Seq (Text, Value))
   deriving stock (Eq, Ord, Show)
@@ -25,11 +25,10 @@ jsonParser = valP
   valP = stripP rawValP
   rawValP =
     altP
-      "value"
-      [ ("null", nullP)
-      , ("str", strP)
-      , ("array", arrayP)
-      , ("object", objectP)
+      [ labelP "null" nullP
+      , labelP "str" strP
+      , labelP "array" arrayP
+      , labelP "object" objectP
       ]
   nullP = ValueNull <$ expectP "null"
   rawStrP = betweenP (expectP "\"") (expectP "\"") (takeWhileP (/= '"'))
@@ -56,20 +55,19 @@ arithParser :: Parser Void Arith
 arithParser = rootP
  where
   addDigit n d = n * 10 + d
-  digitP = altP "digit" (fmap (\i -> let j = T.pack (show i) in (j, i <$ expectP j)) [0 .. 9])
+  digitP = altP (fmap (\i -> let j = T.singleton (intToDigit i) in (i <$ expectP j)) [0 .. 9])
   identP = takeWhile1P isAlpha
   numP = foldl' addDigit 0 <$> greedy1P digitP
-  binaryP op f = uncurry f <$> infixP op rootP rootP
+  binaryP op f = (\(_, a, b) -> f a b) <$> infixRP (expectP op) rootP rootP
   unaryP op f = expectP op *> fmap f rootP
   rawRootP =
     altP
-      "root"
-      [ ("add", binaryP "+" ArithAdd)
-      , ("sub", binaryP "-" ArithSub)
-      , ("mul", binaryP "*" ArithMul)
-      , ("neg", unaryP "-" ArithNeg)
-      , ("paren", betweenP (expectP "(") (expectP ")") rootP)
-      , ("num", ArithNum <$> numP)
-      , ("var", ArithVar <$> identP)
+      [ labelP "add" (binaryP "+" ArithAdd)
+      , labelP "sub" (binaryP "-" ArithSub)
+      , labelP "mul" (binaryP "*" ArithMul)
+      , labelP "neg" (unaryP "-" ArithNeg)
+      , labelP "paren" (betweenP (expectP "(") (expectP ")") rootP)
+      , labelP "num" (ArithNum <$> numP)
+      , labelP "var" (ArithVar <$> identP)
       ]
   rootP = stripP rawRootP
