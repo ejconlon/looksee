@@ -87,7 +87,7 @@ import Control.Monad.Identity (Identity (..))
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.State.Strict (MonadState (..), StateT (..), gets, modify', state)
 import Control.Monad.Trans (MonadTrans (..))
--- import Control.Monad.Writer.Strict (MonadWriter (..))
+import Control.Monad.Writer.Strict (MonadWriter (..))
 import Data.Bifoldable (Bifoldable (..))
 import Data.Bifunctor (Bifunctor (..))
 import Data.Bifunctor.TH (deriveBifoldable, deriveBifunctor, deriveBitraversable)
@@ -216,10 +216,14 @@ errReason :: Err e -> Reason e (Err e)
 errReason = efReason . unErr
 
 newtype T e m a = T {unT :: ExceptT (Err e) (StateT St m) a}
-  deriving newtype (Functor, Applicative, Monad, MonadState St, MonadError (Err e))
+  deriving newtype (Functor, Applicative, Monad, MonadIO, MonadState St, MonadError (Err e))
 
 instance MonadTrans (T e) where
   lift = T . lift . lift
+
+deriving instance MonadReader r m => MonadReader r (T e m)
+
+deriving instance MonadWriter w m => MonadWriter w (T e m)
 
 runT :: T e m a -> St -> m (Either (Err e) a, St)
 runT = runStateT . runExceptT . unT
@@ -234,7 +238,6 @@ tryT :: Monad m => T e m r -> T e m (Either (Err e) r)
 tryT t = get >>= \st -> lift (runT t st) >>= \(er, st') -> er <$ put st'
 
 -- | The parser monad transformer
--- This is essentially `Codensity (T e m) (Either (Err e) a)`
 newtype ParserT e m a = ParserT {unParserT :: forall r. (Either (Err e) a -> T e m r) -> T e m r}
 
 instance Functor (ParserT e m) where
@@ -261,38 +264,27 @@ instance MonadTrans (ParserT e) where
   lift ma = ParserT (\j -> lift ma >>= j . Right)
 
 instance MonadIO m => MonadIO (ParserT e m) where
-  liftIO = lift . liftIO
+  liftIO ma = ParserT (\j -> liftIO ma >>= j . Right)
 
 instance Monad m => MonadFail (ParserT e m) where
   fail = errP . ReasonFail . T.pack
 
--- TODO add
--- instance MonadReader r m => MonadReader r (ParserT e m) where
---   ask = lift ask
---   local f (ParserT g) = ParserT (local f . g)
+instance MonadReader r m => MonadReader r (ParserT e m) where
+  ask = lift ask
+  local f (ParserT g) = ParserT (local f . g)
 
--- TODO not sure about this instance
--- instance MonadWriter w m => MonadWriter w (ParserT e m) where
---   writer = lift . writer
---   tell = lift . tell
---   listen (ParserT g) = ParserT $ \j -> do
---     (ea, w) <- listen g
---     j (fmap (,w) ea)
---   pass (ParserT g) = ParserT $ \j -> do
---     ea <- pass (fmap helpPass g)
---     j ea
+instance MonadWriter w m => MonadWriter w (ParserT e m) where
+  writer = lift . writer
+  tell = lift . tell
+  listen p = ParserT (\j -> listen (runParserT p) >>= j . Right)
+  pass p = ParserT (\j -> pass (runParserT p) >>= j . Right)
 
--- helpPass :: (Either (Err e) (a, w -> w), St) -> ((Either (Err e) a, St), w -> w)
--- helpPass (eaww, st') = either (\e -> ((Left e, st'), id)) (\(a, ww) -> ((Right a, st'), ww)) eaww
-
--- TODO not sure about this instance
--- instance MonadState s m => MonadState s (ParserT e m) where
---   get = lift get
---   put = lift . put
---   state = lift . state
+instance MonadState s m => MonadState s (ParserT e m) where
+  get = lift get
+  put = lift . put
+  state = lift . state
 
 -- private
--- This is essentially 'lowerCodensity'
 runParserT :: Monad m => ParserT e m a -> T e m a
 runParserT (ParserT g) = g (either throwError pure)
 
