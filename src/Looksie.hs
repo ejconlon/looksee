@@ -98,6 +98,7 @@ import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
 import Data.Maybe (fromMaybe, isJust)
 import Data.Ratio ((%))
 import Data.Sequence (Seq (..))
+import Data.Sequence qualified as Seq
 import Data.String (IsString)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -270,19 +271,19 @@ instance Monad m => MonadFail (ParserT e m) where
   fail = errP . ReasonFail . T.pack
 
 instance MonadReader r m => MonadReader r (ParserT e m) where
-  ask = lift ask
+  ask = ParserT (\j -> ask >>= j . Right)
   local f (ParserT g) = ParserT (local f . g)
 
 instance MonadWriter w m => MonadWriter w (ParserT e m) where
-  writer = lift . writer
-  tell = lift . tell
+  writer aw = ParserT (\j -> writer aw >>= j . Right)
+  tell w = ParserT (\j -> tell w >>= j . Right)
   listen p = ParserT (\j -> listen (runParserT p) >>= j . Right)
   pass p = ParserT (\j -> pass (runParserT p) >>= j . Right)
 
 instance MonadState s m => MonadState s (ParserT e m) where
-  get = lift get
-  put = lift . put
-  state = lift . state
+  get = ParserT (\j -> lift get >>= j . Right)
+  put s = ParserT (\j -> lift (put s) >>= j . Right)
+  state f = ParserT (\j -> lift (state f) >>= j . Right)
 
 -- private
 runParserT :: Monad m => ParserT e m a -> T e m a
@@ -347,9 +348,10 @@ endP = do
 
 -- | Makes parse success optional
 optP :: Monad m => ParserT e m a -> ParserT e m (Maybe a)
-optP (ParserT g) = ParserT $ \j -> do
+optP p = ParserT $ \j -> do
   st0 <- get
-  g $ \case
+  ea <- tryT (runParserT p)
+  case ea of
     Left _ -> put st0 *> j (Right Nothing)
     Right a -> j (Right (Just a))
 
@@ -364,9 +366,10 @@ subAltP
 subAltP j st0 = go
  where
   go !errs = \case
-    [] -> put st0 *> mkErrT (ReasonAlt errs) >>= j . Left
-    ParserT g : rest -> do
-      es <- g $ \case
+    [] -> mkErrT (if Seq.null errs then ReasonEmpty else ReasonAlt errs) >>= j . Left
+    p : rest -> do
+      ea <- tryT (runParserT p)
+      es <- case ea of
         Left err -> pure (Left (AltPhaseBranch, err))
         Right r -> fmap (first (AltPhaseCont,)) (tryT (j (Right r)))
       case es of
@@ -375,11 +378,11 @@ subAltP j st0 = go
 
 -- | Parse with many possible branches
 altP :: (Monad m, Foldable f) => f (ParserT e m a) -> ParserT e m a
-altP falts = ParserT (\j -> get >>= \st -> subAltP j st Empty (toList falts))
+altP falts = ParserT (\j -> get >>= \st0 -> subAltP j st0 Empty (toList falts))
 
 -- | Fail with no results
 emptyP :: Monad m => ParserT e m a
-emptyP = ParserT (\j -> get >>= \st -> j (Left (Err (ErrF (stRange st) ReasonEmpty))))
+emptyP = ParserT (\j -> mkErrT ReasonEmpty >>= j . Left)
 
 -- | Parse repeatedly until the parser fails
 greedyP :: Monad m => ParserT e m a -> ParserT e m (Seq a)
@@ -424,7 +427,7 @@ searchAllP px pa = go
   go = do
     maas <- optInfixRP px pa go
     case maas of
-      Nothing -> fmap (maybe Empty (:<| Empty)) (optP pa)
+      Nothing -> fmap (maybe Empty Seq.singleton) (optP pa)
       Just (_, a, as) -> pure (a :<| as)
 
 searchAll1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
@@ -433,7 +436,7 @@ searchAll1P px pa = go
   go = do
     maas <- optInfixRP px pa go
     case maas of
-      Nothing -> fmap (:<| Empty) pa
+      Nothing -> fmap Seq.singleton pa
       Just (_, a, as) -> pure (a :<| as)
 
 searchLeadP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
@@ -527,7 +530,7 @@ subInfixP mov px pa pb j st0 = goTry
         put st0
         case errs of
           Empty -> j (Right Nothing)
-          _ -> j (Left (Err (ErrF (stRange st0) (ReasonInfix errs))))
+          _ -> mkErrT (ReasonInfix errs) >>= j . Left
       Just stNext -> do
         put stNext
         goTry errs
