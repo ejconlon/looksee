@@ -3,6 +3,7 @@
 
 module Main (main) where
 
+import Control.Applicative (liftA2)
 import Control.Monad (join)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
@@ -21,14 +22,15 @@ type TestResult = Either TestParseError
 
 type TestParseError = Err Error
 
-data ParserCase a = ParserCase !TestName !(TestParser a) !Text !(TestResult a)
+data ParserCase a = ParserCase !TestName !(TestParser a) !Text !(TestResult (a, Int))
 
 emptyResult :: Range -> TestResult a
 emptyResult ra = Left (Err (ErrF ra ReasonEmpty))
 
 testParserCase :: (Show a, Eq a) => ParserCase a -> TestTree
 testParserCase (ParserCase name parser input expected) = testCase name $ do
-  let actual = parse parser input
+  let parser' = liftA2 (,) parser dropAllP
+      actual = parse parser' input
   actual @?= expected
 
 testBasic :: TestTree
@@ -47,14 +49,14 @@ testEmpty =
         ]
   in  fmap testParserCase cases
 
--- test_pure :: [TestTree]
--- test_pure =
---   let parser = pure (1 :: Int)
---       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") 1)
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 0 "hi") 1)
---         ]
---   in  fmap testParserCase cases
+testPure :: [TestTree]
+testPure =
+  let parser = pure 'x'
+      cases =
+        [ ParserCase "empty" parser "" (Right ('x', 0))
+        , ParserCase "non-empty" parser "hi" (Right ('x', 2))
+        ]
+  in  fmap testParserCase cases
 
 -- test_fail :: [TestTree]
 -- test_fail =
