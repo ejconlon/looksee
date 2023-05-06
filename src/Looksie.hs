@@ -73,6 +73,7 @@ module Looksie
   , stripEnd1P
   , sepBy1P
   , sepBy2P
+  , transP
   , scopeP
   , iterP
   , strP
@@ -272,7 +273,7 @@ instance Monad (ParserT e m) where
   return = pure
   ParserT g >>= f = ParserT (\j -> g (\case Left e -> j (Left e); Right a -> let ParserT h = f a in h j))
 
-instance (Monad m, Show e) => Alternative (ParserT e m) where
+instance Monad m => Alternative (ParserT e m) where
   empty = emptyP
   p1 <|> p2 = altP [p1, p2]
   many = fmap toList . greedyP
@@ -377,7 +378,6 @@ optP (ParserT g) = ParserT $ \j -> do
 -- private
 subAltP
   :: Monad m
-  => Show e
   => (Either (Err e) a -> T e m r)
   -> St
   -> Seq (AltPhase, Err e)
@@ -405,7 +405,7 @@ subAltP j st0 = go
             pure s
 
 -- | Parse with many possible branches
-altP :: (Monad m, Foldable f, Show e) => f (ParserT e m a) -> ParserT e m a
+altP :: (Monad m, Foldable f) => f (ParserT e m a) -> ParserT e m a
 altP falts = ParserT (\j -> get >>= \st0 -> subAltP j st0 Empty (toList falts))
 
 -- | Fail with no results
@@ -718,13 +718,17 @@ dropAllP = fmap T.length takeAllP
 dropAll1P :: Monad m => ParserT e m Int
 dropAll1P = fmap T.length takeAll1P
 
--- | Parse with some local state
-scopeP :: Monad m => s -> ParserT e (StateT s m) a -> ParserT e m a
-scopeP s0 (ParserT g) = ParserT $ \j -> do
+-- | Unwrap a monad transformer layer (see 'scopeP' for use)
+transP :: (MonadTrans t, Monad m) => (forall a. t m a -> m a) -> ParserT e (t m) b -> ParserT e m b
+transP f (ParserT g) = ParserT $ \j -> do
   st0 <- get
-  (ea, st1) <- lift (evalStateT (runT (g (hoist lift . j)) st0) s0)
+  (ea, st1) <- lift (f (runT (g (hoist lift . j)) st0))
   put st1
   either throwError pure ea
+
+-- | Parse with some local state
+scopeP :: Monad m => s -> ParserT e (StateT s m) a -> ParserT e m a
+scopeP s0 = transP (`evalStateT` s0)
 
 -- | Repeats the parser until it returns a 'Just' value
 iterP :: ParserT e m (Maybe a) -> ParserT e m a
