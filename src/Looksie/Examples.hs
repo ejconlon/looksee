@@ -2,53 +2,55 @@
 
 -- | Example parsers
 module Looksie.Examples
-  ( Value (..)
+  ( Json (..)
   , jsonParser
   , Arith (..)
   , arithParser
+  , Atom (..)
+  , Sexp (..)
+  , sexpParser
   )
 where
 
-import Data.Char (intToDigit, isAlpha)
-import Data.Foldable (foldl')
+import Control.Applicative ((<|>))
+import Data.Char (isAlpha)
 import Data.Sequence (Seq)
 import Data.Text (Text)
-import Data.Text qualified as T
 import Data.Void (Void)
-import Looksie (Parser, altP, betweenP, decP, doubleStrP, expectP, greedy1P, infixRP, labelP, sepByP, stripP, takeWhile1P)
+import Looksie (Parser, altP, betweenP, decP, doubleStrP, expectP, infixRP, labelP, sepByP, stripP, takeWhile1P, intP, stripEndP, space1P)
 
 -- | A JSON value
-data Value = ValueNull | ValueString !Text | ValueArray !(Seq Value) | ValueObject !(Seq (Text, Value)) | ValueNum !Rational
+data Json = JsonNull | JsonString !Text | JsonArray !(Seq Json) | JsonObject !(Seq (Text, Json)) | JsonNum !Rational | JsonBool !Bool
   deriving stock (Eq, Ord, Show)
 
 -- | A JSON parser (modulo some differences in numeric parsing)
-jsonParser :: Parser Void Value
-jsonParser = valP
+jsonParser :: Parser Void Json
+jsonParser = stripP valP
  where
-  valP = stripP rawValP
-  rawValP =
+  valP =
     altP
       [ labelP "null" nullP
+      , labelP "bool" boolP
       , labelP "str" strP
       , labelP "array" arrayP
       , labelP "object" objectP
       , labelP "num" numP
       ]
-  numP = ValueNum <$> decP
-  nullP = ValueNull <$ expectP "null"
-  strP = ValueString <$> doubleStrP
-  arrayP = ValueArray <$> betweenP (expectP "[") (expectP "]") (sepByP (expectP ",") valP)
-  rawPairP = do
+  boolP = JsonBool <$> (False <$ expectP "false" <|> True <$ expectP "true")
+  numP = JsonNum <$> decP
+  nullP = JsonNull <$ expectP "null"
+  strP = JsonString <$> doubleStrP
+  arrayP = JsonArray <$> betweenP (stripEndP (expectP "[")) (expectP "]") (sepByP (stripEndP (expectP ",")) (stripEndP valP))
+  pairP = do
     s <- doubleStrP
     stripP (expectP ":")
-    v <- rawValP
+    v <- valP
     pure (s, v)
-  pairP = stripP rawPairP
-  objectP = ValueObject <$> betweenP (expectP "{") (expectP "}") (sepByP (expectP ",") pairP)
+  objectP = JsonObject <$> betweenP (stripEndP (expectP "{")) (expectP "}") (sepByP (stripEndP (expectP ",")) (stripEndP pairP))
 
 -- | An arithmetic expression
 data Arith
-  = ArithNum !Int
+  = ArithNum !Rational
   | ArithVar !Text
   | ArithNeg Arith
   | ArithMul Arith Arith
@@ -58,22 +60,50 @@ data Arith
 
 -- | A parser for arithmetic expressions
 arithParser :: Parser Void Arith
-arithParser = rootP
+arithParser = stripP rootP
  where
-  addDigit n d = n * 10 + d
-  digitP = altP (fmap (\i -> let j = T.singleton (intToDigit i) in (i <$ expectP j)) [0 .. 9])
   identP = takeWhile1P isAlpha
-  numP = foldl' addDigit 0 <$> greedy1P digitP
-  binaryP op f = (\(_, a, b) -> f a b) <$> infixRP (expectP op) rootP rootP
+  binaryP op f = (\(_, a, b) -> f a b) <$> infixRP (stripEndP (expectP op)) (stripEndP rootP) rootP
   unaryP op f = expectP op *> fmap f rootP
-  rawRootP =
+  rootP =
     altP
       [ labelP "add" (binaryP "+" ArithAdd)
       , labelP "sub" (binaryP "-" ArithSub)
       , labelP "mul" (binaryP "*" ArithMul)
       , labelP "neg" (unaryP "-" ArithNeg)
-      , labelP "paren" (betweenP (expectP "(") (expectP ")") rootP)
-      , labelP "num" (ArithNum <$> numP)
+      , labelP "paren" (betweenP (stripEndP (expectP "(")) (expectP ")") (stripEndP rootP))
+      , labelP "num" (ArithNum <$> decP)
       , labelP "var" (ArithVar <$> identP)
       ]
-  rootP = stripP rawRootP
+
+-- | Leaves of S-expression trees
+data Atom
+  = AtomIdent !Text
+  | AtomString !Text
+  | AtomInt !Integer
+  | AtomSci !Rational
+  deriving stock (Eq, Ord, Show)
+
+-- | An S-expression
+data Sexp
+  = SexpAtom !Atom
+  | SexpList !(Seq Sexp)
+  deriving stock (Eq, Ord, Show)
+
+-- | A parser for S-expressions
+sexpParser :: Parser Void Sexp
+sexpParser = stripP rootP where
+  identP = takeWhile1P isAlpha
+  atomP =
+    altP
+      [ labelP "ident" (AtomIdent <$> identP)
+      , labelP "string" (AtomString <$> doubleStrP)
+      , labelP "int" (AtomInt <$> intP)
+      , labelP "sci" (AtomSci <$> decP)
+      ]
+  listP = betweenP (stripEndP (expectP "(")) (expectP ")") (stripEndP (sepByP space1P rootP))
+  rootP =
+    altP
+      [ labelP "atom" (SexpAtom <$> atomP)
+      , labelP "list" (SexpList <$> listP)
+      ]
