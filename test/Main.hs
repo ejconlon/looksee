@@ -3,96 +3,49 @@
 
 module Main (main) where
 
+import Control.Monad (join)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
+import Data.String (IsString)
 import Data.Text (Text)
 import Looksie
 import Looksie.Examples
 import Test.Tasty (TestName, TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
--- newtype Label = Label {unLabel :: String} deriving (Eq, Show, IsString)
+newtype Error = Error {unError :: String} deriving (Eq, Show, IsString)
 
--- newtype Error = Error {unError :: String} deriving (Eq, Show, IsString)
+type TestParser = Parser Error
 
--- type TestState = OffsetStream Text
+type TestResult = Either TestParseError
 
--- type TestBlock a b = PureMatchBlock Label TestState Error a b
+type TestParseError = Err Error
 
--- type TestParser a = Parser Label TestState Error a
+data ParserCase a = ParserCase !TestName !(TestParser a) !Text !(TestResult a)
 
--- type TestResult a = ParseResult Label TestState Error a
+emptyResult :: Range -> TestResult a
+emptyResult ra = Left (Err (ErrF ra ReasonEmpty))
 
--- type TestRawError = RawError Text Char
+testParserCase :: (Show a, Eq a) => ParserCase a -> TestTree
+testParserCase (ParserCase name parser input expected) = testCase name $ do
+  let actual = parse parser input
+  actual @?= expected
 
--- type TestParseError = ParseError Label TestState Error
+testBasic :: TestTree
+testBasic =
+  testGroup "basic" $
+    join
+      [ testEmpty
+      ]
 
--- data ParserCase a = ParserCase !TestName !(TestParser a) !Text !(Maybe (TestResult a))
-
--- data ExamineCase a b = ExamineCase !TestName !(TestBlock a b) !Text !(LookAheadTestResult Label)
-
--- fwd :: Int -> TestState -> TestState
--- fwd n (OffsetStream (Offset i) t) =
---   let m = min n (T.length t)
---   in  OffsetStream (Offset (i + m)) (T.drop m t)
-
--- sucRes :: TestState -> a -> Maybe (TestResult a)
--- sucRes st = Just . ParseResultSuccess . ParseSuccess st
-
--- errRes :: [TestParseError] -> Maybe (TestResult a)
--- errRes es = Just (ParseResultError (ParseErrorBundle (NESeq.unsafeFromSeq (Seq.fromList es))))
-
--- custErr :: TestState -> Error -> TestParseError
--- custErr endSt = ParseError emptyStack endSt . CompoundErrorCustom
-
--- stmErr :: TestState -> TestRawError -> TestParseError
--- stmErr endSt = ParseError emptyStack endSt . CompoundErrorStream . StreamError
-
--- failErr :: TestState -> Text -> TestParseError
--- failErr endSt = ParseError emptyStack endSt . CompoundErrorFail
-
--- markWith :: TestState -> TestParseError -> TestParseError
--- markWith s = markParseError (Mark Nothing s)
-
--- anyTokErr :: TestState -> TestParseError
--- anyTokErr s = markWith s (stmErr s RawErrorAnyToken)
-
--- anyChunkErr :: TestState -> TestParseError
--- anyChunkErr s = markWith s (stmErr s RawErrorAnyChunk)
-
--- matchTokErr :: TestState -> Char -> Maybe Char -> TestParseError
--- matchTokErr s x my = markWith s (stmErr (fwd 1 s) (RawErrorMatchToken x my))
-
--- matchChunkErr :: TestState -> Text -> Maybe Text -> TestParseError
--- matchChunkErr s x my = markWith s (stmErr (fwd (T.length x) s) (RawErrorMatchChunk x my))
-
--- matchEndErr :: TestState -> Char -> TestParseError
--- matchEndErr s x = markWith s (stmErr (fwd 1 s) (RawErrorMatchEnd x))
-
--- takeTokErr :: TestState -> Int -> Maybe Char -> TestParseError
--- takeTokErr s n my = markWith s (stmErr (fwd n s) (RawErrorTakeTokensWhile1 my))
-
--- dropTokErr :: TestState -> Int -> Maybe Char -> TestParseError
--- dropTokErr s n my = markWith s (stmErr (fwd n s) (RawErrorDropTokensWhile1 my))
-
--- testParserCase :: (Show a, Eq a) => ParserCase a -> TestTree
--- testParserCase (ParserCase name parser input expected) = testCase name $ do
---   let actual = runParser parser (newOffsetStream input)
---   actual @?= expected
-
--- testExamineCase :: ExamineCase a b -> TestTree
--- testExamineCase (ExamineCase name block input expected) = testCase name $ do
---   let actual = pureLookAheadTest block (newOffsetStream input)
---   actual @?= expected
-
--- test_empty :: [TestTree]
--- test_empty =
---   let parser = emptyParser :: TestParser Int
---       cases =
---         [ ParserCase "empty" parser "" Nothing
---         , ParserCase "non-empty" parser "hi" Nothing
---         ]
---   in  fmap testParserCase cases
+testEmpty :: [TestTree]
+testEmpty =
+  let parser = emptyP :: TestParser Int
+      cases =
+        [ ParserCase "empty" parser "" (emptyResult (Range 0 0))
+        , ParserCase "non-empty" parser "hi" (emptyResult (Range 0 2))
+        ]
+  in  fmap testParserCase cases
 
 -- test_pure :: [TestTree]
 -- test_pure =
@@ -658,6 +611,7 @@ main =
   defaultMain $
     testGroup
       "Looksie"
-      [ testJson
+      [ testBasic
+      , testJson
       , testSexp
       ]

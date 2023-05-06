@@ -60,11 +60,16 @@ module Looksie
   , stripEndP
   , measureP
   , headP
+  , signedWithP
   , signedP
   , intP
   , uintP
   , decP
   , udecP
+  , sciP
+  , usciP
+  -- , numP
+  -- , unumP
   , repeatP
   , repeat1P
   , space1P
@@ -106,6 +111,8 @@ import Data.Foldable (toList)
 import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
 import Data.Maybe (fromMaybe, isJust)
 import Data.Ratio ((%))
+import Data.Scientific (Scientific)
+import Data.Scientific qualified as S
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.String (IsString)
@@ -810,13 +817,17 @@ measureP p = do
 headP :: Monad m => ParserT e m Char
 headP = fmap T.head (takeExactP 1)
 
--- | Add signed-ness to any numeric parser
-signedP :: (Monad m, Num a) => ParserT e m a -> ParserT e m a
-signedP p = do
+-- | Add signed-ness to any parser with a negate function
+signedWithP :: Monad m => (a -> a) -> ParserT e m a -> ParserT e m a
+signedWithP neg p = do
   ms <- optP (expectP "-")
   case ms of
     Nothing -> p
-    Just _ -> fmap negate p
+    Just _ -> fmap neg p
+
+-- | Add signed-ness to any numeric parser
+signedP :: (Monad m, Num a) => ParserT e m a -> ParserT e m a
+signedP = signedWithP negate
 
 -- | Parse an signed integer
 intP :: Monad m => ParserT e m Integer
@@ -843,6 +854,21 @@ udecP = do
       pure (whole + part)
     else pure whole
 
+-- | Parse a signed scientific number
+sciP :: Monad m => ParserT e m Scientific
+sciP = signedP usciP
+
+-- | Parse an unsigned scientific  number
+-- TODO really implement this
+usciP :: Monad m => ParserT e m Scientific
+usciP = fmap S.unsafeFromRational udecP
+
+-- numP :: Monad m => ParserT e m (Either Integer Scientific)
+-- numP = signedWithP (bimap negate negate) unumP
+
+-- unumP :: Monad m => ParserT e m (Either Integer Scientific)
+-- unumP = error "TODO"
+
 -- | Repeat a parser until it fails, collecting the results.
 repeatP :: Monad m => ParserT e m a -> ParserT e m (Seq a)
 repeatP p = go Empty
@@ -854,41 +880,6 @@ repeatP p = go Empty
       Just a -> go (acc :|> a)
 
 -- | Like 'repeatP' but ensures at least 1
--- (ParserT g) : rest -> g $ \case
--- (ParserT g) : rest -> g $ \case
--- (ParserT g) : rest -> g $ \case
--- (ParserT g) : rest -> g $ \case
--- (ParserT g) : rest -> g $ \case
---   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
---   Right r -> do
---     es <- tryT (j (Right r))
---     case es of
---       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
---       Right s -> pure s
---   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
---   Right r -> do
---     es <- tryT (j (Right r))
---     case es of
---       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
---       Right s -> pure s
---   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
---   Right r -> do
---     es <- tryT (j (Right r))
---     case es of
---       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
---       Right s -> pure s
---   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
---   Right r -> do
---     es <- tryT (j (Right r))
---     case es of
---       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
---       Right s -> pure s
---   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
---   Right r -> do
---     es <- tryT (j (Right r))
---     case es of
---       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
---       Right s -> pure s
 repeat1P :: Monad m => ParserT e m a -> ParserT e m (Seq a)
 repeat1P p = liftA2 (:<|) p (repeatP p)
 

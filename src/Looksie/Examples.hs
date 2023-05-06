@@ -14,13 +14,20 @@ where
 
 import Control.Applicative ((<|>))
 import Data.Char (isAlpha)
+import Data.Scientific (Scientific)
 import Data.Sequence (Seq)
 import Data.Text (Text)
 import Data.Void (Void)
-import Looksie (Parser, altP, betweenP, decP, doubleStrP, expectP, infixRP, intP, labelP, sepByP, space1P, stripEndP, stripP, takeWhile1P)
+import Looksie (Parser, altP, betweenP, decP, doubleStrP, expectP, infixRP, intP, labelP, sciP, sepByP, space1P, stripEndP, stripP, takeWhile1P)
 
 -- | A JSON value
-data Json = JsonNull | JsonString !Text | JsonArray !(Seq Json) | JsonObject !(Seq (Text, Json)) | JsonNum !Rational | JsonBool !Bool
+data Json
+  = JsonNull
+  | JsonString !Text
+  | JsonArray !(Seq Json)
+  | JsonObject !(Seq (Text, Json))
+  | JsonNum !Scientific
+  | JsonBool !Bool
   deriving stock (Eq, Ord, Show)
 
 -- | A JSON parser (modulo some differences in numeric parsing)
@@ -37,7 +44,7 @@ jsonParser = stripP valP
       , labelP "num" numP
       ]
   boolP = JsonBool <$> (False <$ expectP "false" <|> True <$ expectP "true")
-  numP = JsonNum <$> decP
+  numP = JsonNum <$> sciP
   nullP = JsonNull <$ expectP "null"
   strP = JsonString <$> doubleStrP
   arrayP = JsonArray <$> betweenP (stripEndP (expectP "[")) (expectP "]") (sepByP (stripEndP (expectP ",")) (stripEndP valP))
@@ -81,7 +88,7 @@ data Atom
   = AtomIdent !Text
   | AtomString !Text
   | AtomInt !Integer
-  | AtomSci !Rational
+  | AtomSci !Scientific
   deriving stock (Eq, Ord, Show)
 
 -- | An S-expression
@@ -100,7 +107,7 @@ sexpParser = stripP rootP
       [ labelP "ident" (AtomIdent <$> identP)
       , labelP "string" (AtomString <$> doubleStrP)
       , labelP "int" (AtomInt <$> intP)
-      , labelP "sci" (AtomSci <$> decP)
+      , labelP "sci" (AtomSci <$> sciP)
       ]
   listP = betweenP (stripEndP (expectP "(")) (expectP ")") (stripEndP (sepByP space1P rootP))
   rootP =

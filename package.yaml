@@ -17,14 +17,15 @@ extra-source-files:
 
 dependencies:
 - base >= 4.12 && < 5
-- text
-- containers
-- mtl
 - bifunctors
-- recursion-schemes
+- containers
 - errata
-- vector
 - mmorph
+- mtl
+- recursion-schemes
+- scientific
+- text
+- vector
 
 default-extensions:
 - BangPatterns
