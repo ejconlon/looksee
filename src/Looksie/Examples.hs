@@ -17,7 +17,7 @@ import Data.Char (isAlpha)
 import Data.Sequence (Seq)
 import Data.Text (Text)
 import Data.Void (Void)
-import Looksie (Parser, altP, betweenP, decP, doubleStrP, expectP, infixRP, labelP, sepByP, stripP, takeWhile1P, intP, stripEndP, space1P)
+import Looksie (Parser, altP, betweenP, decP, doubleStrP, expectP, infixRP, intP, labelP, sepByP, space1P, stripEndP, stripP, takeWhile1P)
 
 -- | A JSON value
 data Json = JsonNull | JsonString !Text | JsonArray !(Seq Json) | JsonObject !(Seq (Text, Json)) | JsonNum !Rational | JsonBool !Bool
@@ -92,7 +92,8 @@ data Sexp
 
 -- | A parser for S-expressions
 sexpParser :: Parser Void Sexp
-sexpParser = stripP rootP where
+sexpParser = stripP rootP
+ where
   identP = takeWhile1P isAlpha
   atomP =
     altP

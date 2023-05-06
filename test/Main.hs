@@ -3,22 +3,9 @@
 
 module Main (main) where
 
-import Control.Monad (void)
-import Data.Foldable (asum)
-import Data.Functor (($>))
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
--- import qualified Data.Sequence.NonEmpty as NESeq
-import Data.String (IsString)
 import Data.Text (Text)
-import Data.Text qualified as T
--- import SimpleParser
--- import SimpleParser.Examples.Common.Sexp (Atom (..), Sexp (..), SexpF (..))
--- import SimpleParser.Examples.Direct.Json (Json (..), JsonF (..), jsonParser)
--- import qualified SimpleParser.Examples.Direct.Sexp as SexpDirect
--- import qualified SimpleParser.Examples.Lexed.Sexp as SexpLexed
-
--- import Test.Tasty.TH (defaultMainGenerator)
 import Looksie
 import Looksie.Examples
 import Test.Tasty (TestName, TestTree, defaultMain, testGroup)

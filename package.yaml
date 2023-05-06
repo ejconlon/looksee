@@ -24,6 +24,7 @@ dependencies:
 - recursion-schemes
 - errata
 - vector
+- mmorph
 
 default-extensions:
 - BangPatterns

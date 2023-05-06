@@ -91,6 +91,7 @@ import Control.Monad (ap, void)
 import Control.Monad.Except (ExceptT, MonadError (..), runExceptT)
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.Identity (Identity (..))
+import Control.Monad.Morph (MFunctor (..))
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.State.Strict (MonadState (..), StateT (..), evalStateT, gets, state)
 import Control.Monad.Trans (MonadTrans (..))
@@ -99,7 +100,7 @@ import Data.Bifoldable (Bifoldable (..))
 import Data.Bifunctor (Bifunctor (..))
 import Data.Bifunctor.TH (deriveBifoldable, deriveBifunctor, deriveBitraversable)
 import Data.Bitraversable (Bitraversable (..))
-import Data.Char (digitToInt, isSpace, isDigit)
+import Data.Char (digitToInt, isDigit, isSpace)
 import Data.Foldable (toList)
 import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
 import Data.Maybe (fromMaybe, isJust)
@@ -234,6 +235,9 @@ newtype T e m a = T {unT :: ExceptT (Err e) (StateT St m) a}
 instance MonadTrans (T e) where
   lift = T . lift . lift
 
+instance MFunctor (T e) where
+  hoist mn (T x) = T (hoist (hoist mn) x)
+
 deriving instance MonadReader r m => MonadReader r (T e m)
 
 deriving instance MonadWriter w m => MonadWriter w (T e m)
@@ -268,7 +272,7 @@ instance Monad (ParserT e m) where
   return = pure
   ParserT g >>= f = ParserT (\j -> g (\case Left e -> j (Left e); Right a -> let ParserT h = f a in h j))
 
-instance Monad m => Alternative (ParserT e m) where
+instance (Monad m, Show e) => Alternative (ParserT e m) where
   empty = emptyP
   p1 <|> p2 = altP [p1, p2]
   many = fmap toList . greedyP
@@ -302,12 +306,10 @@ instance MonadState s m => MonadState s (ParserT e m) where
   state f = ParserT (\j -> lift (state f) >>= j . Right)
 
 -- private
-runParserT :: Monad m => ParserT e m a -> T e m a
-runParserT (ParserT g) = g (either throwError pure)
-
--- private
-tryParserT :: Monad m => ParserT e m a -> T e m (Either (Err e) a)
-tryParserT (ParserT g) = g pure
+finishParserT :: Monad m => ParserT e m a -> St -> m (Either (Err e) a, St)
+finishParserT (ParserT g) st =
+  let t = g (either throwError pure)
+  in  runT t st
 
 -- private
 getP :: Monad m => ParserT e m St
@@ -337,7 +339,7 @@ leftoverP = getsP (\st -> let Range s e = stRange st in e - s)
 -- If you really don't care about the rest of the input, you can always
 -- discard it with 'dropAllP'.
 parseT :: Monad m => ParserT e m a -> Text -> m (Either (Err e) a)
-parseT p h = fmap fst (runT (runParserT (p <* endP)) (St h (range h) Empty))
+parseT p h = fmap fst (finishParserT (p <* endP) (St h (range h) Empty))
 
 -- | Run a parser (see 'parseT')
 parse :: Parser e a -> Text -> Either (Err e) a
@@ -366,16 +368,16 @@ endP = do
 
 -- | Makes parse success optional
 optP :: Monad m => ParserT e m a -> ParserT e m (Maybe a)
-optP p = ParserT $ \j -> do
+optP (ParserT g) = ParserT $ \j -> do
   st0 <- get
-  ea <- tryParserT p
-  case ea of
+  g $ \case
     Left _ -> put st0 *> j (Right Nothing)
     Right a -> j (Right (Just a))
 
 -- private
 subAltP
   :: Monad m
+  => Show e
   => (Either (Err e) a -> T e m r)
   -> St
   -> Seq (AltPhase, Err e)
@@ -385,17 +387,25 @@ subAltP j st0 = go
  where
   go !errs = \case
     [] -> mkErrT (if Seq.null errs then ReasonEmpty else ReasonAlt errs) >>= j . Left
-    p : rest -> do
-      ea <- tryParserT p
-      es <- case ea of
-        Left err -> pure (Left (AltPhaseBranch, err))
-        Right r -> fmap (first (AltPhaseCont,)) (tryT (j (Right r)))
-      case es of
-        Left e -> put st0 *> go (errs :|> e) rest
-        Right s -> pure s
+    ParserT g : rest -> g $ \case
+      Left e -> do
+        -- traceM ("Alt unwinding branch (Left: " ++ show (length rest) ++ ")")
+        -- traceShowM e
+        put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
+      Right r -> do
+        es <- tryT (j (Right r))
+        case es of
+          Left e -> do
+            -- traceM ("Alt unwinding cont (Left: " ++ show (length rest) ++ ")")
+            -- traceShowM e
+            put st0 *> go (errs :|> (AltPhaseCont, e)) rest
+          Right s -> do
+            -- traceM "Alt success"
+            -- traceM ("Skipped: " ++ show (length rest))
+            pure s
 
 -- | Parse with many possible branches
-altP :: (Monad m, Foldable f) => f (ParserT e m a) -> ParserT e m a
+altP :: (Monad m, Foldable f, Show e) => f (ParserT e m a) -> ParserT e m a
 altP falts = ParserT (\j -> get >>= \st0 -> subAltP j st0 Empty (toList falts))
 
 -- | Fail with no results
@@ -422,12 +432,10 @@ lookP (ParserT g) = ParserT (\j -> get >>= \st -> g (\ea -> put st *> j ea))
 
 -- | Labels parse errors
 labelP :: Monad m => Label -> ParserT e m a -> ParserT e m a
-labelP lab p = ParserT $ \j -> do
-  ea <- tryParserT p
-  ea' <- case ea of
-    Left e -> fmap Left (mkErrT (ReasonLabelled lab e))
-    Right a -> pure (Right a)
-  j ea'
+labelP lab (ParserT g) = ParserT $ \j ->
+  g $ \case
+    Left e -> mkErrT (ReasonLabelled lab e) >>= j . Left
+    Right a -> j (Right a)
 
 -- | Expect the given text at the start of the range
 expectP :: Monad m => Text -> ParserT e m ()
@@ -534,50 +542,52 @@ subInfixP
   -> St
   -> Seq (Int, InfixPhase, Err e)
   -> T e m r
-subInfixP mov px pa pb j st0 = goTry
- where
-  goTry errs = do
-    stStart <- get
-    exl <- tryParserT (measureP px)
-    case exl of
-      Left _ -> goNext errs stStart
-      Right (x, lenX) -> do
-        let rng0 = stRange st0
-            srt0 = rangeStart rng0
-            hay0 = stHay st0
-            endA = rangeStart (stRange stStart)
-            lenA = endA - srt0
-            rngA = rng0 {rangeEnd = endA}
-            hayA = T.take lenA hay0
-            stA = st0 {stHay = hayA, stRange = rngA}
-            hayB = T.drop (lenA + lenX) hay0
-            srtB = endA + lenX
-            rngB = rng0 {rangeStart = srtB}
-            stB = st0 {stHay = hayB, stRange = rngB}
-        put stA
-        ea <- tryParserT (pa <* endP)
-        case ea of
-          Left errA -> goNext (errs :|> (endA, InfixPhaseLeft, errA)) stStart
-          Right a -> do
-            put stB
-            eb <- tryParserT pb
-            case eb of
-              Left errB -> goNext (errs :|> (endA, InfixPhaseRight, errB)) stStart
-              Right b -> do
-                ec <- tryT (j (Right (Just (x, a, b))))
-                case ec of
-                  Left errC -> goNext (errs :|> (endA, InfixPhaseCont, errC)) stStart
-                  Right c -> pure c
-  goNext !errs stStart =
-    case mov stStart of
-      Nothing -> do
-        put st0
-        case errs of
-          Empty -> j (Right Nothing)
-          _ -> mkErrT (ReasonInfix errs) >>= j . Left
-      Just stNext -> do
-        put stNext
-        goTry errs
+subInfixP = undefined
+
+-- subInfixP mov px pa pb j st0 = goTry
+--  where
+--   goTry errs = do
+--     stStart <- get
+--     exl <- tryParserT (measureP px)
+--     case exl of
+--       Left _ -> goNext errs stStart
+--       Right (x, lenX) -> do
+--         let rng0 = stRange st0
+--             srt0 = rangeStart rng0
+--             hay0 = stHay st0
+--             endA = rangeStart (stRange stStart)
+--             lenA = endA - srt0
+--             rngA = rng0 {rangeEnd = endA}
+--             hayA = T.take lenA hay0
+--             stA = st0 {stHay = hayA, stRange = rngA}
+--             hayB = T.drop (lenA + lenX) hay0
+--             srtB = endA + lenX
+--             rngB = rng0 {rangeStart = srtB}
+--             stB = st0 {stHay = hayB, stRange = rngB}
+--         put stA
+--         ea <- tryParserT (pa <* endP)
+--         case ea of
+--           Left errA -> goNext (errs :|> (endA, InfixPhaseLeft, errA)) stStart
+--           Right a -> do
+--             put stB
+--             eb <- tryParserT pb
+--             case eb of
+--               Left errB -> goNext (errs :|> (endA, InfixPhaseRight, errB)) stStart
+--               Right b -> do
+--                 ec <- tryT (j (Right (Just (x, a, b))))
+--                 case ec of
+--                   Left errC -> goNext (errs :|> (endA, InfixPhaseCont, errC)) stStart
+--                   Right c -> pure c
+--   goNext !errs stStart =
+--     case mov stStart of
+--       Nothing -> do
+--         put st0
+--         case errs of
+--           Empty -> j (Right Nothing)
+--           _ -> mkErrT (ReasonInfix errs) >>= j . Left
+--       Just stNext -> do
+--         put stNext
+--         goTry errs
 
 -- private
 optInfixRP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (x, a, b))
@@ -710,11 +720,11 @@ dropAll1P = fmap T.length takeAll1P
 
 -- | Parse with some local state
 scopeP :: Monad m => s -> ParserT e (StateT s m) a -> ParserT e m a
-scopeP s0 p = ParserT $ \j -> do
+scopeP s0 (ParserT g) = ParserT $ \j -> do
   st0 <- get
-  (ea, st1) <- lift (evalStateT (runT (runParserT p) st0) s0)
+  (ea, st1) <- lift (evalStateT (runT (g (hoist lift . j)) st0) s0)
   put st1
-  j ea
+  either throwError pure ea
 
 -- | Repeats the parser until it returns a 'Just' value
 iterP :: ParserT e m (Maybe a) -> ParserT e m a
@@ -845,41 +855,41 @@ repeatP p = go Empty
       Just a -> go (acc :|> a)
 
 -- | Like 'repeatP' but ensures at least 1
-    -- (ParserT g) : rest -> g $ \case
-    -- (ParserT g) : rest -> g $ \case
-    -- (ParserT g) : rest -> g $ \case
-    -- (ParserT g) : rest -> g $ \case
-    -- (ParserT g) : rest -> g $ \case
-    --   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
-    --   Right r -> do
-    --     es <- tryT (j (Right r))
-    --     case es of
-    --       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
-    --       Right s -> pure s
-    --   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
-    --   Right r -> do
-    --     es <- tryT (j (Right r))
-    --     case es of
-    --       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
-    --       Right s -> pure s
-    --   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
-    --   Right r -> do
-    --     es <- tryT (j (Right r))
-    --     case es of
-    --       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
-    --       Right s -> pure s
-    --   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
-    --   Right r -> do
-    --     es <- tryT (j (Right r))
-    --     case es of
-    --       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
-    --       Right s -> pure s
-    --   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
-    --   Right r -> do
-    --     es <- tryT (j (Right r))
-    --     case es of
-    --       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
-    --       Right s -> pure s
+-- (ParserT g) : rest -> g $ \case
+-- (ParserT g) : rest -> g $ \case
+-- (ParserT g) : rest -> g $ \case
+-- (ParserT g) : rest -> g $ \case
+-- (ParserT g) : rest -> g $ \case
+--   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
+--   Right r -> do
+--     es <- tryT (j (Right r))
+--     case es of
+--       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
+--       Right s -> pure s
+--   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
+--   Right r -> do
+--     es <- tryT (j (Right r))
+--     case es of
+--       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
+--       Right s -> pure s
+--   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
+--   Right r -> do
+--     es <- tryT (j (Right r))
+--     case es of
+--       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
+--       Right s -> pure s
+--   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
+--   Right r -> do
+--     es <- tryT (j (Right r))
+--     case es of
+--       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
+--       Right s -> pure s
+--   Left e -> put st0 *> go (errs :|> (AltPhaseBranch, e)) rest
+--   Right r -> do
+--     es <- tryT (j (Right r))
+--     case es of
+--       Left e -> put st0 *> go (errs :|> (AltPhaseCont, e)) rest
+--       Right s -> pure s
 repeat1P :: Monad m => ParserT e m a -> ParserT e m (Seq a)
 repeat1P p = liftA2 (:<|) p (repeatP p)
 
