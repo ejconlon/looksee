@@ -3,8 +3,7 @@
 
 module Main (main) where
 
-import Control.Applicative (liftA2)
-import Control.Monad (join)
+import Control.Applicative (Alternative (..), liftA2)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.String (IsString)
@@ -18,14 +17,20 @@ newtype Error = Error {unError :: String} deriving (Eq, Show, IsString)
 
 type TestParser = Parser Error
 
-type TestResult = Either TestParseError
-
-type TestParseError = Err Error
+type TestResult = Either (Err Error)
 
 data ParserCase a = ParserCase !TestName !(TestParser a) !Text !(TestResult (a, Int))
 
-emptyResult :: Range -> TestResult a
-emptyResult ra = Left (Err (ErrF ra ReasonEmpty))
+err :: Range -> Reason Error (Err Error) -> TestResult (a, Int)
+err ra re = Left (Err (ErrF ra re))
+
+errAlt :: Range -> [(AltPhase, Range, Reason Error (Err Error))] -> TestResult (a, Int)
+errAlt ra tups = Left (Err (ErrF ra (ReasonAlt (Seq.fromList (fmap f tups)))))
+ where
+  f (ap, ra', re) = (ap, Err (ErrF ra' re))
+
+suc :: a -> Int -> TestResult (a, Int)
+suc a i = Right (a, i)
 
 testParserCase :: (Show a, Eq a) => ParserCase a -> TestTree
 testParserCase (ParserCase name parser input expected) = testCase name $ do
@@ -36,16 +41,31 @@ testParserCase (ParserCase name parser input expected) = testCase name $ do
 testBasic :: TestTree
 testBasic =
   testGroup "basic" $
-    join
-      [ testEmpty
+    fmap
+      (uncurry testGroup)
+      [ ("empty", testEmpty)
+      , ("pure", testPure)
+      , ("fail", testFail)
+      , ("head", testHead)
+      , ("take", testTake)
+      , ("drop", testDrop)
+      , ("end", testEnd)
+      , ("expectHead", testExpectHead)
+      , ("expect", testExpect)
+      , ("greedy", testGreedy)
+      , ("greedy1", testGreedy1)
+      , ("or", testOr)
+      , ("alt", testAlt)
+      , ("opt (empty)", testOptEmpty)
+      , ("opt", testOpt)
       ]
 
 testEmpty :: [TestTree]
 testEmpty =
   let parser = emptyP :: TestParser Int
       cases =
-        [ ParserCase "empty" parser "" (emptyResult (Range 0 0))
-        , ParserCase "non-empty" parser "hi" (emptyResult (Range 0 2))
+        [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
+        , ParserCase "non-empty" parser "hi" (err (Range 0 2) ReasonEmpty)
         ]
   in  fmap testParserCase cases
 
@@ -53,243 +73,172 @@ testPure :: [TestTree]
 testPure =
   let parser = pure 'x'
       cases =
-        [ ParserCase "empty" parser "" (Right ('x', 0))
-        , ParserCase "non-empty" parser "hi" (Right ('x', 2))
+        [ ParserCase "empty" parser "" (suc 'x' 0)
+        , ParserCase "non-empty" parser "hi" (suc 'x' 2)
         ]
   in  fmap testParserCase cases
 
--- test_fail :: [TestTree]
--- test_fail =
---   let parser = fail "i give up" :: TestParser Int
---       cases =
---         [ ParserCase "empty" parser "" (errRes [failErr (OffsetStream 0 "") "i give up"])
---         , ParserCase "non-empty" parser "hi" (errRes [failErr (OffsetStream 0 "hi") "i give up"])
---         ]
---   in  fmap testParserCase cases
+testFail :: [TestTree]
+testFail =
+  let parser = fail "i give up" :: TestParser Int
+      cases =
+        [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonFail "i give up"))
+        , ParserCase "non-empty" parser "hi" (err (Range 0 2) (ReasonFail "i give up"))
+        ]
+  in  fmap testParserCase cases
 
--- test_peek_token :: [TestTree]
--- test_peek_token =
---   let parser = peekToken
---       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") Nothing)
---         , ParserCase "match" parser "hi" (sucRes (OffsetStream 0 "hi") (Just 'h'))
---         ]
---   in  fmap testParserCase cases
+testHead :: [TestTree]
+testHead =
+  let parser = headP
+      cases =
+        [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonDemand 1 0))
+        , ParserCase "non-empty" parser "hi" (suc 'h' 1)
+        ]
+  in  fmap testParserCase cases
 
--- test_pop_token :: [TestTree]
--- test_pop_token =
---   let parser = popToken
---       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") Nothing)
---         , ParserCase "match" parser "hi" (sucRes (OffsetStream 1 "i") (Just 'h'))
---         ]
---   in  fmap testParserCase cases
+testTake :: [TestTree]
+testTake =
+  let parser = takeP 2
+      cases =
+        [ ParserCase "len 0" parser "" (suc "" 0)
+        , ParserCase "len 1" parser "h" (suc "h" 0)
+        , ParserCase "len 2" parser "hi" (suc "hi" 0)
+        , ParserCase "len 3" parser "hii" (suc "hi" 1)
+        ]
+  in  fmap testParserCase cases
 
--- test_peek_chunk :: [TestTree]
--- test_peek_chunk =
---   let parser = peekChunk 2
---       cases =
---         [ ParserCase "len 0" parser "" (sucRes (OffsetStream 0 "") Nothing)
---         , ParserCase "len 1" parser "h" (sucRes (OffsetStream 0 "h") (Just "h"))
---         , ParserCase "len 2" parser "hi" (sucRes (OffsetStream 0 "hi") (Just "hi"))
---         , ParserCase "len 3" parser "hii" (sucRes (OffsetStream 0 "hii") (Just "hi"))
---         ]
---   in  fmap testParserCase cases
+testDrop :: [TestTree]
+testDrop =
+  let parser = dropP 2
+      cases =
+        [ ParserCase "len 0" parser "" (suc 0 0)
+        , ParserCase "len 1" parser "h" (suc 1 0)
+        , ParserCase "len 2" parser "hi" (suc 2 0)
+        , ParserCase "len 3" parser "hii" (suc 2 1)
+        ]
+  in  fmap testParserCase cases
 
--- test_pop_chunk :: [TestTree]
--- test_pop_chunk =
---   let parser = popChunk 2
---       cases =
---         [ ParserCase "len 0" parser "" (sucRes (OffsetStream 0 "") Nothing)
---         , ParserCase "len 1" parser "h" (sucRes (OffsetStream 1 "") (Just "h"))
---         , ParserCase "len 2" parser "hi" (sucRes (OffsetStream 2 "") (Just "hi"))
---         , ParserCase "len 3" parser "hii" (sucRes (OffsetStream 2 "i") (Just "hi"))
---         ]
---   in  fmap testParserCase cases
+testEnd :: [TestTree]
+testEnd =
+  let parser = endP
+      cases =
+        [ ParserCase "empty" parser "" (suc () 0)
+        , ParserCase "non-empty" parser "hi" (err (Range 0 2) (ReasonLeftover 2))
+        ]
+  in  fmap testParserCase cases
 
--- test_drop_chunk :: [TestTree]
--- test_drop_chunk =
---   let parser = dropChunk 2
---       cases =
---         [ ParserCase "len 0" parser "" (sucRes (OffsetStream 0 "") Nothing)
---         , ParserCase "len 1" parser "h" (sucRes (OffsetStream 1 "") (Just 1))
---         , ParserCase "len 2" parser "hi" (sucRes (OffsetStream 2 "") (Just 2))
---         , ParserCase "len 3" parser "hii" (sucRes (OffsetStream 2 "i") (Just 2))
---         ]
---   in  fmap testParserCase cases
+testExpectHead :: [TestTree]
+testExpectHead =
+  let parser = expectHeadP 'h'
+      cases =
+        [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "h" ""))
+        , ParserCase "non-empty" parser "hi" (suc () 1)
+        , ParserCase "non-match" parser "bye" (err (Range 1 3) (ReasonExpect "h" "b"))
+        ]
+  in  fmap testParserCase cases
 
--- test_is_end :: [TestTree]
--- test_is_end =
---   let parser = isEnd
---       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") True)
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 0 "hi") False)
---         ]
---   in  fmap testParserCase cases
+testExpect :: [TestTree]
+testExpect =
+  let parser = expectP "hi"
+      cases =
+        [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "hi" ""))
+        , ParserCase "non-empty" parser "hi" (suc () 0)
+        , ParserCase "prefix" parser "hiya" (suc () 2)
+        , ParserCase "partial" parser "hey" (err (Range 2 3) (ReasonExpect "hi" "he"))
+        , ParserCase "non-match" parser "bye" (err (Range 2 3) (ReasonExpect "hi" "by"))
+        , ParserCase "short" parser "h" (err (Range 1 1) (ReasonExpect "hi" "h"))
+        ]
+  in  fmap testParserCase cases
 
--- test_match_end :: [TestTree]
--- test_match_end =
---   let parser = matchEnd
---       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") ())
---         , ParserCase "non-empty" parser "hi" (errRes [matchEndErr (OffsetStream 0 "hi") 'h'])
---         ]
---   in  fmap testParserCase cases
+testGreedy :: [TestTree]
+testGreedy =
+  let parser = fmap length (greedyP (expectHeadP 'h')) :: TestParser Int
+      cases =
+        [ ParserCase "empty" parser "" (suc 0 0)
+        , ParserCase "non-empty" parser "hi" (suc 1 1)
+        , ParserCase "repeat" parser "hhi" (suc 2 1)
+        , ParserCase "full" parser "hhh" (suc 3 0)
+        , ParserCase "non-match" parser "bye" (suc 0 3)
+        ]
+  in  fmap testParserCase cases
 
--- test_any_token :: [TestTree]
--- test_any_token =
---   let parser = anyToken
---       cases =
---         [ ParserCase "empty" parser "" (errRes [anyTokErr (OffsetStream 0 "")])
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 1 "i") 'h')
---         ]
---   in  fmap testParserCase cases
+testGreedy1 :: [TestTree]
+testGreedy1 =
+  let parser = fmap length (greedy1P (expectHeadP 'h')) :: TestParser Int
+      cases =
+        [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "h" ""))
+        , ParserCase "non-empty" parser "hi" (suc 1 1)
+        , ParserCase "repeat" parser "hhi" (suc 2 1)
+        , ParserCase "full" parser "hhh" (suc 3 0)
+        , ParserCase "non-match" parser "bye" (err (Range 1 3) (ReasonExpect "h" "b"))
+        ]
+  in  fmap testParserCase cases
 
--- test_any_chunk :: [TestTree]
--- test_any_chunk =
---   let parser = anyChunk 2 :: TestParser Text
---       cases =
---         [ ParserCase "len 0" parser "" (errRes [anyChunkErr (OffsetStream 0 "")])
---         , ParserCase "len 1" parser "h" (sucRes (OffsetStream 1 "") "h")
---         , ParserCase "len 2" parser "hi" (sucRes (OffsetStream 2 "") "hi")
---         , ParserCase "len 3" parser "hii" (sucRes (OffsetStream 2 "i") "hi")
---         ]
---   in  fmap testParserCase cases
+testOr :: [TestTree]
+testOr =
+  let parser = ("h" <$ expectHeadP 'h') <|> ("xi" <$ expectP "xi") :: TestParser String
+      cases =
+        [ ParserCase "empty" parser "" $
+            errAlt
+              (Range 0 0)
+              [ (AltPhaseBranch, Range 0 0, ReasonExpect "h" "")
+              , (AltPhaseBranch, Range 0 0, ReasonExpect "xi" "")
+              ]
+        , ParserCase "first" parser "hi" (suc "h" 1)
+        , ParserCase "second" parser "xi" (suc "xi" 0)
+        , ParserCase "non-match" parser "bye" $
+            errAlt
+              (Range 0 3)
+              [ (AltPhaseBranch, Range 1 3, ReasonExpect "h" "b")
+              , (AltPhaseBranch, Range 2 3, ReasonExpect "xi" "by")
+              ]
+        ]
+  in  fmap testParserCase cases
 
--- test_match_token :: [TestTree]
--- test_match_token =
---   let parser = matchToken 'h'
---       cases =
---         [ ParserCase "empty" parser "" (errRes [matchTokErr (OffsetStream 0 "") 'h' Nothing])
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 1 "i") 'h')
---         , ParserCase "non-match" parser "bye" (errRes [matchTokErr (OffsetStream 0 "bye") 'h' (Just 'b')])
---         ]
---   in  fmap testParserCase cases
+testAlt :: [TestTree]
+testAlt =
+  let parser = altP ["h" <$ expectHeadP 'h', "y" <$ headP, "xi" <$ expectP "xi"] :: TestParser String
+      cases =
+        [ ParserCase "empty" parser "" $
+            errAlt
+              (Range 0 0)
+              [ (AltPhaseBranch, Range 0 0, ReasonExpect "h" "")
+              , (AltPhaseBranch, Range 0 0, ReasonDemand 1 0)
+              , (AltPhaseBranch, Range 0 0, ReasonExpect "xi" "")
+              ]
+        , ParserCase "first" parser "hi" (suc "h" 1)
+        , ParserCase "middle" parser "zi" (suc "y" 1)
+        , ParserCase "last" parser "xi" (suc "y" 1)
+        ]
+  in  fmap testParserCase cases
 
--- test_match_chunk :: [TestTree]
--- test_match_chunk =
---   let parser = matchChunk "hi"
---       cases =
---         [ ParserCase "empty" parser "" (errRes [matchChunkErr (OffsetStream 0 "") "hi" Nothing])
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 2 "") "hi")
---         , ParserCase "prefix" parser "hiya" (sucRes (OffsetStream 2 "ya") "hi")
---         , ParserCase "partial" parser "hey" (errRes [matchChunkErr (OffsetStream 0 "hey") "hi" (Just "he")])
---         , ParserCase "non-match" parser "bye" (errRes [matchChunkErr (OffsetStream 0 "bye") "hi" (Just "by")])
---         , ParserCase "short" parser "h" (errRes [matchChunkErr (OffsetStream 0 "h") "hi" (Just "h")])
---         ]
---   in  fmap testParserCase cases
+testOptEmpty :: [TestTree]
+testOptEmpty =
+  let parser = optP emptyP :: TestParser (Maybe ())
+      cases =
+        [ ParserCase "empty" parser "" (suc Nothing 0)
+        , ParserCase "non-empty" parser "hi" (suc Nothing 2)
+        ]
+  in  fmap testParserCase cases
 
--- test_greedy_star :: [TestTree]
--- test_greedy_star =
---   let parser = greedyStarParser (matchToken 'h') :: TestParser String
---       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") "")
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 1 "i") "h")
---         , ParserCase "repeat" parser "hhi" (sucRes (OffsetStream 2 "i") "hh")
---         , ParserCase "full" parser "hhh" (sucRes (OffsetStream 3 "") "hhh")
---         , ParserCase "non-match" parser "bye" (sucRes (OffsetStream 0 "bye") "")
---         ]
---   in  fmap testParserCase cases
-
--- test_greedy_star_unit :: [TestTree]
--- test_greedy_star_unit =
---   let parser = greedyStarParser_ (matchToken 'h')
---       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") ())
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 1 "i") ())
---         , ParserCase "repeat" parser "hhi" (sucRes (OffsetStream 2 "i") ())
---         , ParserCase "full" parser "hhh" (sucRes (OffsetStream 3 "") ())
---         , ParserCase "non-match" parser "bye" (sucRes (OffsetStream 0 "bye") ())
---         ]
---   in  fmap testParserCase cases
-
--- test_greedy_plus :: [TestTree]
--- test_greedy_plus =
---   let parser = greedyPlusParser (matchToken 'h') :: TestParser String
---       cases =
---         [ ParserCase "empty" parser "" (errRes [matchTokErr (OffsetStream 0 "") 'h' Nothing])
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 1 "i") "h")
---         , ParserCase "repeat" parser "hhi" (sucRes (OffsetStream 2 "i") "hh")
---         , ParserCase "full" parser "hhh" (sucRes (OffsetStream 3 "") "hhh")
---         , ParserCase "non-match" parser "bye" (errRes [matchTokErr (OffsetStream 0 "bye") 'h' (Just 'b')])
---         ]
---   in  fmap testParserCase cases
-
--- test_greedy_plus_unit :: [TestTree]
--- test_greedy_plus_unit =
---   let parser = greedyPlusParser_ (matchToken 'h')
---       cases =
---         [ ParserCase "empty" parser "" (errRes [matchTokErr (OffsetStream 0 "") 'h' Nothing])
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 1 "i") ())
---         , ParserCase "repeat" parser "hhi" (sucRes (OffsetStream 2 "i") ())
---         , ParserCase "full" parser "hhh" (sucRes (OffsetStream 3 "") ())
---         , ParserCase "non-match" parser "bye" (errRes [matchTokErr (OffsetStream 0 "bye") 'h' (Just 'b')])
---         ]
---   in  fmap testParserCase cases
-
--- test_or :: [TestTree]
--- test_or =
---   let parser = orParser (matchToken 'h') (matchToken 'x')
---       cases =
---         [ ParserCase "empty" parser "" $
---             errRes
---               [ matchTokErr (OffsetStream 0 "") 'h' Nothing
---               , matchTokErr (OffsetStream 0 "") 'x' Nothing
---               ]
---         , ParserCase "first" parser "hi" (sucRes (OffsetStream 1 "i") 'h')
---         , ParserCase "second" parser "xi" (sucRes (OffsetStream 1 "i") 'x')
---         , ParserCase "non-match" parser "bye" $
---             errRes
---               [ matchTokErr (OffsetStream 0 "bye") 'h' (Just 'b')
---               , matchTokErr (OffsetStream 0 "bye") 'x' (Just 'b')
---               ]
---         ]
---   in  fmap testParserCase cases
-
--- test_asum :: [TestTree]
--- test_asum =
---   let state = OffsetStream 1 "i"
---       parser = asum [matchToken 'h', 'y' <$ anyToken, matchToken 'x']
---       cases =
---         [ ParserCase "empty" parser "" $
---             errRes
---               [ matchTokErr (OffsetStream 0 "") 'h' Nothing
---               , anyTokErr (OffsetStream 0 "")
---               , matchTokErr (OffsetStream 0 "") 'x' Nothing
---               ]
---         , ParserCase "first" parser "hi" (sucRes state 'h')
---         , ParserCase "middle" parser "zi" (sucRes state 'y')
---         , ParserCase "last" parser "xi" (sucRes state 'y')
---         ]
---   in  fmap testParserCase cases
-
--- test_default_empty :: [TestTree]
--- test_default_empty =
---   let parser = defaultParser 'z' emptyParser
---       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") 'z')
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 0 "hi") 'z')
---         ]
---   in  fmap testParserCase cases
-
--- test_default :: [TestTree]
--- test_default =
---   let parser = defaultParser 'z' (matchToken 'h')
---       cases =
---         [ ParserCase "non-match empty" parser "" (sucRes (OffsetStream 0 "") 'z')
---         , ParserCase "match" parser "hi" (sucRes (OffsetStream 1 "i") 'h')
---         , ParserCase "non-match" parser "bye" (sucRes (OffsetStream 0 "bye") 'z')
---         ]
---   in  fmap testParserCase cases
+testOpt :: [TestTree]
+testOpt =
+  let parser = optP (expectHeadP 'h') :: TestParser (Maybe ())
+      cases =
+        [ ParserCase "non-match empty" parser "" (suc Nothing 0)
+        , ParserCase "match" parser "hi" (suc (Just ()) 1)
+        , ParserCase "non-match" parser "bye" (suc Nothing 3)
+        ]
+  in  fmap testParserCase cases
 
 -- test_bind_1 :: [TestTree]
 -- test_bind_1 =
 --   let state = OffsetStream 1 "i"
 --       parser = matchToken 'x' >>= \c -> pure [c, c]
 --       cases =
---         [ ParserCase "empty" parser "" (errRes [matchTokErr (OffsetStream 0 "") 'x' Nothing])
---         , ParserCase "first" parser "hi" (errRes [matchTokErr (OffsetStream 0 "hi") 'x' (Just 'h')])
---         , ParserCase "second" parser "xi" (sucRes state "xx")
+--         [ ParserCase "empty" parser "" (err [matchTokErr (OffsetStream 0 "") 'x' Nothing])
+--         , ParserCase "first" parser "hi" (err [matchTokErr (OffsetStream 0 "hi") 'x' (Just 'h')])
+--         , ParserCase "second" parser "xi" (suc state "xx")
 --         ]
 --   in  fmap testParserCase cases
 
@@ -298,9 +247,9 @@ testPure =
 --   let state = OffsetStream 1 "i"
 --       parser = anyToken >>= \x -> if x == 'x' then pure 'y' else emptyParser
 --       cases =
---         [ ParserCase "empty" parser "" (errRes [anyTokErr (OffsetStream 0 "")])
+--         [ ParserCase "empty" parser "" (err [anyTokErr (OffsetStream 0 "")])
 --         , ParserCase "first" parser "hi" Nothing
---         , ParserCase "second" parser "xi" (sucRes state 'y')
+--         , ParserCase "second" parser "xi" (suc state 'y')
 --         ]
 --   in  fmap testParserCase cases
 
@@ -309,8 +258,8 @@ testPure =
 --   let err = Error "boo"
 --       parser = throwParser err :: TestParser Int
 --       cases =
---         [ ParserCase "empty" parser "" (errRes [custErr (OffsetStream 0 "") err])
---         , ParserCase "non-empty" parser "hi" (errRes [custErr (OffsetStream 0 "hi") err])
+--         [ ParserCase "empty" parser "" (err [custErr (OffsetStream 0 "") err])
+--         , ParserCase "non-empty" parser "hi" (err [custErr (OffsetStream 0 "hi") err])
 --         ]
 --   in  fmap testParserCase cases
 
@@ -319,8 +268,8 @@ testPure =
 --   let err = Error "boo"
 --       parser = anyToken *> throwParser err :: TestParser Int
 --       cases =
---         [ ParserCase "empty" parser "" (errRes [anyTokErr (OffsetStream 0 "")])
---         , ParserCase "non-empty" parser "hi" (errRes [custErr (OffsetStream 1 "i") err])
+--         [ ParserCase "empty" parser "" (err [anyTokErr (OffsetStream 0 "")])
+--         , ParserCase "non-empty" parser "hi" (err [custErr (OffsetStream 1 "i") err])
 --         ]
 --   in  fmap testParserCase cases
 
@@ -329,8 +278,8 @@ testPure =
 --   let err = Error "boo"
 --       parser = defaultParser 'z' (throwParser err)
 --       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") 'z')
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 0 "hi") 'z')
+--         [ ParserCase "empty" parser "" (suc (OffsetStream 0 "") 'z')
+--         , ParserCase "non-empty" parser "hi" (suc (OffsetStream 0 "hi") 'z')
 --         ]
 --   in  fmap testParserCase cases
 
@@ -339,8 +288,8 @@ testPure =
 --   let err = Error "boo"
 --       parser = defaultParser 'z' (anyToken *> throwParser err)
 --       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") 'z')
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 0 "hi") 'z')
+--         [ ParserCase "empty" parser "" (suc (OffsetStream 0 "") 'z')
+--         , ParserCase "non-empty" parser "hi" (suc (OffsetStream 0 "hi") 'z')
 --         ]
 --   in  fmap testParserCase cases
 
@@ -350,7 +299,7 @@ testPure =
 --       err = Error "boo"
 --       parser = orParser (throwParser err) (pure 1) :: TestParser Int
 --       cases =
---         [ ParserCase "non-empty" parser "hi" (sucRes state 1)
+--         [ ParserCase "non-empty" parser "hi" (suc state 1)
 --         ]
 --   in  fmap testParserCase cases
 
@@ -360,54 +309,7 @@ testPure =
 --       err = Error "boo"
 --       parser = orParser (pure 1) (throwParser err) :: TestParser Int
 --       cases =
---         [ ParserCase "non-empty" parser "hi" (sucRes state 1)
---         ]
---   in  fmap testParserCase cases
-
--- test_catch :: [TestTree]
--- test_catch =
---   let state = OffsetStream 0 "hi"
---       err = Error "boo"
---       parser = catchParser (throwParser err) (\(Error m) -> pure (if m == "boo" then 2 else 3)) :: TestParser Int
---       cases =
---         [ ParserCase "non-empty" parser "hi" (sucRes state 2)
---         ]
---   in  fmap testParserCase cases
-
--- test_catch_recur :: [TestTree]
--- test_catch_recur =
---   let state = OffsetStream 0 "hi"
---       err1 = Error "boo"
---       err2 = Error "two"
---       parser = catchParser (throwParser err1) (const (throwParser err2)) :: TestParser Int
---       cases =
---         [ ParserCase "non-empty" parser "hi" (errRes [custErr state err2])
---         ]
---   in  fmap testParserCase cases
-
--- test_silence_success :: [TestTree]
--- test_silence_success =
---   let state = OffsetStream 0 "hi"
---       parser = silenceParser (pure 1) :: TestParser Int
---       cases =
---         [ ParserCase "non-empty" parser "hi" (sucRes state 1)
---         ]
---   in  fmap testParserCase cases
-
--- test_silence_fail :: [TestTree]
--- test_silence_fail =
---   let err = Error "boo"
---       parser = silenceParser (throwParser err) :: TestParser Int
---       cases =
---         [ ParserCase "non-empty" parser "hi" Nothing
---         ]
---   in  fmap testParserCase cases
-
--- test_silence_empty :: [TestTree]
--- test_silence_empty =
---   let parser = silenceParser emptyParser :: TestParser Int
---       cases =
---         [ ParserCase "non-empty" parser "hi" Nothing
+--         [ ParserCase "non-empty" parser "hi" (suc state 1)
 --         ]
 --   in  fmap testParserCase cases
 
@@ -415,8 +317,8 @@ testPure =
 -- test_look_ahead_pure =
 --   let parser = lookAheadParser (pure 1) :: TestParser Int
 --       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") 1)
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 0 "hi") 1)
+--         [ ParserCase "empty" parser "" (suc (OffsetStream 0 "") 1)
+--         , ParserCase "non-empty" parser "hi" (suc (OffsetStream 0 "hi") 1)
 --         ]
 --   in  fmap testParserCase cases
 
@@ -424,8 +326,8 @@ testPure =
 -- test_look_ahead_success =
 --   let parser = lookAheadParser anyToken
 --       cases =
---         [ ParserCase "non-match empty" parser "" (errRes [anyTokErr (OffsetStream 0 "")])
---         , ParserCase "non-empty" parser "hi" (sucRes (OffsetStream 0 "hi") 'h')
+--         [ ParserCase "non-match empty" parser "" (err [anyTokErr (OffsetStream 0 "")])
+--         , ParserCase "non-empty" parser "hi" (suc (OffsetStream 0 "hi") 'h')
 --         ]
 --   in  fmap testParserCase cases
 
@@ -434,18 +336,8 @@ testPure =
 --   let err = Error "boo"
 --       parser = lookAheadParser (anyToken *> throwParser err) :: TestParser Char
 --       cases =
---         [ ParserCase "non-match empty" parser "" (errRes [anyTokErr (OffsetStream 0 "")])
---         , ParserCase "non-empty" parser "hi" (errRes [custErr (OffsetStream 1 "i") err])
---         ]
---   in  fmap testParserCase cases
-
--- test_commit :: [TestTree]
--- test_commit =
---   let parser = commitParser (void (matchToken 'h')) (matchChunk "hi") :: TestParser Text
---       cases =
---         [ ParserCase "non-match empty" parser "" Nothing
---         , ParserCase "non-match non-empty" parser "ho" (errRes [matchChunkErr (OffsetStream 0 "ho") "hi" (Just "ho")])
---         , ParserCase "match" parser "hi" (sucRes (OffsetStream 2 "") "hi")
+--         [ ParserCase "non-match empty" parser "" (err [anyTokErr (OffsetStream 0 "")])
+--         , ParserCase "non-empty" parser "hi" (err [custErr (OffsetStream 1 "i") err])
 --         ]
 --   in  fmap testParserCase cases
 
@@ -453,11 +345,11 @@ testPure =
 -- test_take_while =
 --   let parser = takeTokensWhile (== 'h') :: TestParser Text
 --       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") "")
---         , ParserCase "non-match" parser "i" (sucRes (OffsetStream 0 "i") "")
---         , ParserCase "match" parser "hi" (sucRes (OffsetStream 1 "i") "h")
---         , ParserCase "match 2" parser "hhi" (sucRes (OffsetStream 2 "i") "hh")
---         , ParserCase "match end" parser "hh" (sucRes (OffsetStream 2 "") "hh")
+--         [ ParserCase "empty" parser "" (suc (OffsetStream 0 "") "")
+--         , ParserCase "non-match" parser "i" (suc (OffsetStream 0 "i") "")
+--         , ParserCase "match" parser "hi" (suc (OffsetStream 1 "i") "h")
+--         , ParserCase "match 2" parser "hhi" (suc (OffsetStream 2 "i") "hh")
+--         , ParserCase "match end" parser "hh" (suc (OffsetStream 2 "") "hh")
 --         ]
 --   in  fmap testParserCase cases
 
@@ -465,11 +357,11 @@ testPure =
 -- test_take_while_1 =
 --   let parser = takeTokensWhile1 Nothing (== 'h') :: TestParser Text
 --       cases =
---         [ ParserCase "empty" parser "" (errRes [takeTokErr (OffsetStream 0 "") 0 Nothing])
---         , ParserCase "non-match" parser "i" (errRes [takeTokErr (OffsetStream 0 "i") 0 (Just 'i')])
---         , ParserCase "match" parser "hi" (sucRes (OffsetStream 1 "i") "h")
---         , ParserCase "match 2" parser "hhi" (sucRes (OffsetStream 2 "i") "hh")
---         , ParserCase "match end" parser "hh" (sucRes (OffsetStream 2 "") "hh")
+--         [ ParserCase "empty" parser "" (err [takeTokErr (OffsetStream 0 "") 0 Nothing])
+--         , ParserCase "non-match" parser "i" (err [takeTokErr (OffsetStream 0 "i") 0 (Just 'i')])
+--         , ParserCase "match" parser "hi" (suc (OffsetStream 1 "i") "h")
+--         , ParserCase "match 2" parser "hhi" (suc (OffsetStream 2 "i") "hh")
+--         , ParserCase "match end" parser "hh" (suc (OffsetStream 2 "") "hh")
 --         ]
 --   in  fmap testParserCase cases
 
@@ -477,11 +369,11 @@ testPure =
 -- test_drop_while =
 --   let parser = dropTokensWhile (== 'h') :: TestParser Int
 --       cases =
---         [ ParserCase "empty" parser "" (sucRes (OffsetStream 0 "") 0)
---         , ParserCase "non-match" parser "i" (sucRes (OffsetStream 0 "i") 0)
---         , ParserCase "match" parser "hi" (sucRes (OffsetStream 1 "i") 1)
---         , ParserCase "match 2" parser "hhi" (sucRes (OffsetStream 2 "i") 2)
---         , ParserCase "match end" parser "hh" (sucRes (OffsetStream 2 "") 2)
+--         [ ParserCase "empty" parser "" (suc (OffsetStream 0 "") 0)
+--         , ParserCase "non-match" parser "i" (suc (OffsetStream 0 "i") 0)
+--         , ParserCase "match" parser "hi" (suc (OffsetStream 1 "i") 1)
+--         , ParserCase "match 2" parser "hhi" (suc (OffsetStream 2 "i") 2)
+--         , ParserCase "match end" parser "hh" (suc (OffsetStream 2 "") 2)
 --         ]
 --   in  fmap testParserCase cases
 
@@ -489,46 +381,13 @@ testPure =
 -- test_drop_while_1 =
 --   let parser = dropTokensWhile1 Nothing (== 'h') :: TestParser Int
 --       cases =
---         [ ParserCase "empty" parser "" (errRes [dropTokErr (OffsetStream 0 "") 0 Nothing])
---         , ParserCase "non-match" parser "i" (errRes [dropTokErr (OffsetStream 0 "i") 0 (Just 'i')])
---         , ParserCase "match" parser "hi" (sucRes (OffsetStream 1 "i") 1)
---         , ParserCase "match 2" parser "hhi" (sucRes (OffsetStream 2 "i") 2)
---         , ParserCase "match end" parser "hh" (sucRes (OffsetStream 2 "") 2)
+--         [ ParserCase "empty" parser "" (err [dropTokErr (OffsetStream 0 "") 0 Nothing])
+--         , ParserCase "non-match" parser "i" (err [dropTokErr (OffsetStream 0 "i") 0 (Just 'i')])
+--         , ParserCase "match" parser "hi" (suc (OffsetStream 1 "i") 1)
+--         , ParserCase "match 2" parser "hhi" (suc (OffsetStream 2 "i") 2)
+--         , ParserCase "match end" parser "hh" (suc (OffsetStream 2 "") 2)
 --         ]
 --   in  fmap testParserCase cases
-
--- simpleBlock :: TestBlock Char Text
--- simpleBlock =
---   MatchBlock
---     anyToken
---     (pure "default")
---     [ MatchCase (Just (Label "match x")) (== 'x') (anyToken $> "found x - consuming")
---     , MatchCase (Just (Label "match x dupe")) (== 'x') (pure "dupe x - leaving")
---     , MatchCase (Just (Label "match y")) (== 'y') (pure "found y - leaving")
---     ]
-
--- test_look_ahead_match :: [TestTree]
--- test_look_ahead_match =
---   let parser = lookAheadMatch simpleBlock
---       cases =
---         [ ParserCase "empty" parser "" (errRes [anyTokErr (OffsetStream 0 "")])
---         , ParserCase "non-match" parser "wz" (sucRes (OffsetStream 0 "wz") "default")
---         , ParserCase "match x" parser "xz" (sucRes (OffsetStream 1 "z") "found x - consuming")
---         , ParserCase "match y" parser "yz" (sucRes (OffsetStream 0 "yz") "found y - leaving")
---         ]
---   in  fmap testParserCase cases
-
--- test_look_ahead_examine :: [TestTree]
--- test_look_ahead_examine =
---   let xpositions = [MatchPos 0 (Just (Label "match x")), MatchPos 1 (Just (Label "match x dupe"))]
---       ypositions = [MatchPos 2 (Just (Label "match y"))]
---       cases =
---         [ ExamineCase "empty" simpleBlock "" LookAheadTestEmpty
---         , ExamineCase "non-match" simpleBlock "wz" LookAheadTestDefault
---         , ExamineCase "match x" simpleBlock "xz" (LookAheadTestMatches (NESeq.unsafeFromSeq (Seq.fromList xpositions)))
---         , ExamineCase "match y" simpleBlock "yz" (LookAheadTestMatches (NESeq.unsafeFromSeq (Seq.fromList ypositions)))
---         ]
---   in  fmap testExamineCase cases
 
 testJsonCase :: TestName -> Text -> Maybe Json -> TestTree
 testJsonCase name str expected = testCase ("json " <> name) $ do

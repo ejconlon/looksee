@@ -29,6 +29,7 @@ module Looksie
   , lookP
   , labelP
   , expectP
+  , expectHeadP
   , splitNearP
   , splitFarP
   , splitAllP
