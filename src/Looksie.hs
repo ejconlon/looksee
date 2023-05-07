@@ -29,7 +29,9 @@ module Looksie
   , lookP
   , labelP
   , expectP
+  , expectP_
   , expectHeadP
+  , expectHeadP_
   , splitNearP
   , splitFarP
   , splitAllP
@@ -182,6 +184,8 @@ data Reason e r
   | ReasonInfix !(Seq (Int, InfixPhase, r))
   | ReasonFail !Text
   | ReasonLabelled !Label r
+  | ReasonLook r
+  | ReasonTakeNone
   | ReasonEmpty
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
@@ -436,7 +440,9 @@ greedy1P p = liftA2 (:<|) p (greedyP p)
 
 -- | Lookahead - rewinds state if the parser succeeds, otherwise throws error
 lookP :: Monad m => ParserT e m a -> ParserT e m a
-lookP (ParserT g) = ParserT (\j -> get >>= \st -> g (\ea -> put st *> j ea))
+lookP (ParserT g) = ParserT $ \j -> do
+  st0 <- get
+  g (\ea -> put st0 *> j (first (Err . ErrF (stRange st0) . ReasonLook) ea))
 
 -- | Labels parse errors
 labelP :: Monad m => Label -> ParserT e m a -> ParserT e m a
@@ -446,16 +452,24 @@ labelP lab (ParserT g) = ParserT $ \j ->
     Right a -> j (Right a)
 
 -- | Expect the given text at the start of the range
-expectP :: Monad m => Text -> ParserT e m ()
+expectP :: Monad m => Text -> ParserT e m Text
 expectP n = do
   o <- takeP (T.length n)
   if n == o
-    then pure ()
+    then pure n
     else errP (ReasonExpect n o)
 
+-- | Saves you from importing 'void'
+expectP_ :: Monad m => Text -> ParserT e m ()
+expectP_ = void . expectP
+
 -- | Expect the given character at the start of the range
-expectHeadP :: Monad m => Char -> ParserT e m ()
-expectHeadP = expectP . T.singleton
+expectHeadP :: Monad m => Char -> ParserT e m Char
+expectHeadP = fmap T.head . expectP . T.singleton
+
+-- | Saves you from importing 'void'
+expectHeadP_ :: Monad m => Char -> ParserT e m ()
+expectHeadP_ = void . expectHeadP
 
 -- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
 -- Chooses splits from START to END of range (see 'infixRP').
@@ -680,7 +694,7 @@ takeWhile1P f = do
         st' = st {stHay = h', stRange = r'}
     in  if l == 0 then (Nothing, st) else (Just o, st')
   case mt of
-    Nothing -> errP (ReasonDemand 1 0)
+    Nothing -> errP ReasonTakeNone
     Just a -> pure a
 
 -- | Drop characters from the start of the range satisfying the predicate
@@ -744,7 +758,7 @@ data StrState = StrState !Bool !(Seq Char)
 -- | Parse a string with a custom quote character. Supports backslash-escaping.
 strP :: Monad m => Char -> ParserT e m Text
 strP d = do
-  expectP (T.singleton d)
+  expectP_ (T.singleton d)
   scopeP (StrState False Empty) $ iterP $ do
     c <- headP
     state $ \ss@(StrState esc buf) ->
@@ -951,6 +965,11 @@ instance HasErrMessage e => HasErrMessage (Err e) where
             let hd = "Labelled parser: " <> unLabel lab
                 tl = indent 1 (getErrMessage e)
             in  hd : tl
+          ReasonLook e ->
+            let hd = "Error in lookahead:"
+                tl = indent 1 (getErrMessage e)
+            in  hd : tl
+          ReasonTakeNone -> ["Took/dropped no elements"]
           ReasonEmpty -> ["No parse results"]
     in  pos : body
 

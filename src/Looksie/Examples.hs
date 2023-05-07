@@ -18,7 +18,7 @@ import Data.Scientific (Scientific)
 import Data.Sequence (Seq)
 import Data.Text (Text)
 import Data.Void (Void)
-import Looksie (Parser, altP, betweenP, decP, doubleStrP, expectP, infixRP, intP, labelP, sciP, sepByP, space1P, stripEndP, stripP, takeWhile1P)
+import Looksie (Parser, altP, betweenP, decP, doubleStrP, expectP_, infixRP, intP, labelP, sciP, sepByP, space1P, stripEndP, stripP, takeWhile1P)
 
 -- | A JSON value
 data Json
@@ -43,17 +43,17 @@ jsonParser = stripP valP
       , labelP "object" objectP
       , labelP "num" numP
       ]
-  boolP = JsonBool <$> (False <$ expectP "false" <|> True <$ expectP "true")
+  boolP = JsonBool <$> (False <$ expectP_ "false" <|> True <$ expectP_ "true")
   numP = JsonNum <$> sciP
-  nullP = JsonNull <$ expectP "null"
+  nullP = JsonNull <$ expectP_ "null"
   strP = JsonString <$> doubleStrP
-  arrayP = JsonArray <$> betweenP (stripEndP (expectP "[")) (expectP "]") (sepByP (stripEndP (expectP ",")) (stripEndP valP))
+  arrayP = JsonArray <$> betweenP (stripEndP (expectP_ "[")) (expectP_ "]") (sepByP (stripEndP (expectP_ ",")) (stripEndP valP))
   pairP = do
     s <- doubleStrP
-    stripP (expectP ":")
+    stripP (expectP_ ":")
     v <- valP
     pure (s, v)
-  objectP = JsonObject <$> betweenP (stripEndP (expectP "{")) (expectP "}") (sepByP (stripEndP (expectP ",")) (stripEndP pairP))
+  objectP = JsonObject <$> betweenP (stripEndP (expectP_ "{")) (expectP_ "}") (sepByP (stripEndP (expectP_ ",")) (stripEndP pairP))
 
 -- | An arithmetic expression
 data Arith
@@ -70,15 +70,15 @@ arithParser :: Parser Void Arith
 arithParser = stripP rootP
  where
   identP = takeWhile1P isAlpha
-  binaryP op f = (\(_, a, b) -> f a b) <$> infixRP (stripEndP (expectP op)) (stripEndP rootP) rootP
-  unaryP op f = expectP op *> fmap f rootP
+  binaryP op f = (\(_, a, b) -> f a b) <$> infixRP (stripEndP (expectP_ op)) (stripEndP rootP) rootP
+  unaryP op f = expectP_ op *> fmap f rootP
   rootP =
     altP
       [ labelP "add" (binaryP "+" ArithAdd)
       , labelP "sub" (binaryP "-" ArithSub)
       , labelP "mul" (binaryP "*" ArithMul)
       , labelP "neg" (unaryP "-" ArithNeg)
-      , labelP "paren" (betweenP (stripEndP (expectP "(")) (expectP ")") (stripEndP rootP))
+      , labelP "paren" (betweenP (stripEndP (expectP_ "(")) (expectP_ ")") (stripEndP rootP))
       , labelP "num" (ArithNum <$> decP)
       , labelP "var" (ArithVar <$> identP)
       ]
@@ -109,7 +109,7 @@ sexpParser = stripP rootP
       , labelP "int" (AtomInt <$> intP)
       , labelP "sci" (AtomSci <$> sciP)
       ]
-  listP = betweenP (stripEndP (expectP "(")) (expectP ")") (stripEndP (sepByP space1P rootP))
+  listP = betweenP (stripEndP (expectP_ "(")) (expectP_ ")") (stripEndP (sepByP space1P rootP))
   rootP =
     altP
       [ labelP "atom" (SexpAtom <$> atomP)
