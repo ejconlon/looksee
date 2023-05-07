@@ -71,8 +71,8 @@ module Looksie
   , udecP
   , sciP
   , usciP
-  -- , numP
-  -- , unumP
+  , numP
+  , unumP
   , repeatP
   , repeat1P
   , space1P
@@ -835,7 +835,7 @@ headP = fmap T.head (takeExactP 1)
 -- | Add signed-ness to any parser with a negate function
 signedWithP :: Monad m => (a -> a) -> ParserT e m a -> ParserT e m a
 signedWithP neg p = do
-  ms <- optP (expectP "-")
+  ms <- optP (expectHeadP '-')
   case ms of
     Nothing -> p
     Just _ -> fmap neg p
@@ -860,8 +860,8 @@ decP = signedP udecP
 udecP :: Monad m => ParserT e m Rational
 udecP = do
   whole <- fmap fromInteger uintP
-  dot <- fmap isJust (optP (expectP "."))
-  if dot
+  hasDot <- fmap isJust (optP (expectHeadP '.'))
+  if hasDot
     then do
       (numerator, places) <- measureP uintP
       let denominator = 10 ^ places
@@ -874,15 +874,35 @@ sciP :: Monad m => ParserT e m Scientific
 sciP = signedP usciP
 
 -- | Parse an unsigned scientific  number
--- TODO really implement this
 usciP :: Monad m => ParserT e m Scientific
-usciP = fmap S.unsafeFromRational udecP
+usciP = do
+  whole <- uintP
+  hasDot <- fmap isJust (optP (expectHeadP_ '.'))
+  (frac, places) <- if hasDot then measureP uintP else pure (0, 0)
+  hasEx <- fmap isJust (optP (expectHeadP_ 'e' <|> expectHeadP_ 'E'))
+  ex <- if hasEx then fmap fromIntegral intP else pure 0
+  let wholeS = S.scientific whole ex
+      partS = S.scientific frac (ex - places)
+  pure (wholeS + partS)
 
--- numP :: Monad m => ParserT e m (Either Integer Scientific)
--- numP = signedWithP (bimap negate negate) unumP
+numP :: Monad m => ParserT e m (Either Integer Scientific)
+numP = signedWithP (bimap negate negate) unumP
 
--- unumP :: Monad m => ParserT e m (Either Integer Scientific)
--- unumP = error "TODO"
+unumP :: Monad m => ParserT e m (Either Integer Scientific)
+unumP = do
+  whole <- uintP
+  hasDot <- fmap isJust (optP (expectHeadP_ '.'))
+  mayFracPlaces <- if hasDot then fmap Just (measureP uintP) else pure Nothing
+  hasEx <- fmap isJust (optP (expectHeadP_ 'e' <|> expectHeadP_ 'E'))
+  mayEx <- if hasEx then fmap (Just . fromIntegral) intP else pure Nothing
+  case (mayFracPlaces, mayEx) of
+    (Nothing, Nothing) -> pure (Left whole)
+    _ -> do
+      let (frac, places) = fromMaybe (0, 0) mayFracPlaces
+          ex = fromMaybe 0 mayEx
+          wholeS = S.scientific whole ex
+          partS = S.scientific frac (ex - places)
+      pure (Right (wholeS + partS))
 
 -- | Repeat a parser until it fails, collecting the results.
 repeatP :: Monad m => ParserT e m a -> ParserT e m (Seq a)

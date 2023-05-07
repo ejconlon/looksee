@@ -481,9 +481,8 @@ testJson = testGroup "json" (fmap test cases)
     , ("num0", "0", Just (JsonNum 0))
     , ("num1", "123", Just (JsonNum 123))
     , ("num2", "123.45", Just (JsonNum 123.45))
-    -- TODO implement Scientific parsing
-    -- , ("num3", "1e100", Just (JsonNum (read "1e100")))
-    -- , ("num4", "{\"x\": 1e100, \"y\": 123.45}", Just (objVal [("x", JsonNum (read "1e100")), ("y", JsonNum 123.45)]))
+    , ("num3", "1e100", Just (JsonNum (read "1e100")))
+    , ("num4", "{\"x\": 1e100, \"y\": 123.45}", Just (objVal [("x", JsonNum (read "1e100")), ("y", JsonNum 123.45)]))
     ]
 
 testSexp :: TestTree
@@ -512,12 +511,13 @@ testSexp = testGroup "sexp" (fmap test cases)
     , ("string", "\"xyz\"", Just stringSexp)
     , ("sci", "3.14", Just sciSexp)
     , ("sci neg", "-3.14", Just (SexpAtom (AtomSci -3.14)))
+    , ("sci neg exp", "314e-2", Just sciSexp)
+    , ("sci neg exp 2", "31.4e-1", Just sciSexp)
+    , ("sci pos exp 3", "0.314e1", Just sciSexp)
     , ("sci dec exp", "1.0", Just sciExpSexp)
-    , -- TODO implement Scientific parsing
-      -- , ("sci exp", "1e0", Just sciExpSexp)
-      -- , ("sci pos exp", "+1e0", Just sciExpSexp)
-      -- , ("sci dec exp 2", "1.0e0", Just sciExpSexp)
-      ("multi list", "(1 abc \"xyz\" 3.14)", Just (SexpList (Seq.fromList [numSexp, identSexp, stringSexp, sciSexp])))
+    , ("sci exp", "1e0", Just sciExpSexp)
+    , ("sci dec exp 2", "1.0e0", Just sciExpSexp)
+    , ("multi list", "(1 abc \"xyz\" 3.14)", Just (SexpList (Seq.fromList [numSexp, identSexp, stringSexp, sciSexp])))
     , ("pair nested list", "((1 1) (1 1))", Just (SexpList (Seq.fromList [pairList, pairList])))
     ]
 
