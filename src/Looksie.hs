@@ -885,9 +885,11 @@ usciP = do
       partS = S.scientific frac (ex - places)
   pure (wholeS + partS)
 
+-- | Parse a signed integer/scientific number, defaulting to integer if possible.
 numP :: Monad m => ParserT e m (Either Integer Scientific)
 numP = signedWithP (bimap negate negate) unumP
 
+-- | Parse an unsigned integer/scientific number, defaulting to integer if possible.
 unumP :: Monad m => ParserT e m (Either Integer Scientific)
 unumP = do
   whole <- uintP
