@@ -31,6 +31,11 @@ errAlt ra tups = Left (Err (ErrF ra (ReasonAlt (Seq.fromList (fmap f tups)))))
  where
   f (ap, ra', re) = (ap, Err (ErrF ra' re))
 
+errInfix :: Range -> [(Int, InfixPhase, Range, Reason Error (Err Error))] -> TestResult (a, Int)
+errInfix ra tups = Left (Err (ErrF ra (ReasonInfix (Seq.fromList (fmap f tups)))))
+ where
+  f (ix, ip, ra', re) = (ix, ip, Err (ErrF ra' re))
+
 errLook :: Range -> Range -> Reason Error (Err Error) -> TestResult (a, Int)
 errLook ra1 ra2 re = Left (Err (ErrF ra1 (ReasonLook (Err (ErrF ra2 re)))))
 
@@ -79,6 +84,8 @@ testBasic =
       , ("takeWhile1", testTakeWhile1)
       , ("dropWhile", testDropWhile)
       , ("dropWhile1", testDropWhile1)
+      , ("infixR", testInfixR)
+      , ("infixL", testInfixL)
       ]
 
 testEmpty :: [TestTree]
@@ -412,6 +419,34 @@ testDropWhile1 = fmap testParserCase cases
     , ParserCase "match" parser "hi" (suc 1 1)
     , ParserCase "match 2" parser "hhi" (suc 2 1)
     , ParserCase "match end" parser "hh" (suc 2 0)
+    ]
+
+testInfixR :: [TestTree]
+testInfixR = fmap testParserCase cases
+ where
+  sub d = takeWhile1P (\c -> c == d || c == '+')
+  parser = fmap (\(_, xx, yy) -> (xx, yy)) (infixRP (expectHeadP '+') (sub 'x') (sub 'y')) :: TestParser (Text, Text)
+  cases =
+    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
+    , ParserCase "fail delim" parser "xy" (err (Range 0 2) ReasonEmpty)
+    , ParserCase "fail first" parser "+y" (errInfix (Range 0 2) [(0, InfixPhaseLeft, Range 0 0, ReasonTakeNone)])
+    , ParserCase "fail second" parser "x+" (errInfix (Range 0 2) [(1, InfixPhaseRight, Range 2 2, ReasonTakeNone)])
+    , ParserCase "match" parser "x+y" (suc ("x", "y") 0)
+    , ParserCase "match multi" parser "x++y" (suc ("x", "+y") 0)
+    ]
+
+testInfixL :: [TestTree]
+testInfixL = fmap testParserCase cases
+ where
+  sub d = takeWhile1P (\c -> c == d || c == '+')
+  parser = fmap (\(_, xx, yy) -> (xx, yy)) (infixLP (expectHeadP '+') (sub 'x') (sub 'y')) :: TestParser (Text, Text)
+  cases =
+    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
+    , ParserCase "match" parser "x+y" (suc ("x", "y") 0)
+    , ParserCase "fail delim" parser "xy" (err (Range 0 2) ReasonEmpty)
+    , ParserCase "fail first" parser "+y" (errInfix (Range 0 2) [(0, InfixPhaseLeft, Range 0 0, ReasonTakeNone)])
+    , ParserCase "fail second" parser "x+" (errInfix (Range 0 2) [(1, InfixPhaseRight, Range 2 2, ReasonTakeNone)])
+    , ParserCase "match multi" parser "x++y" (suc ("x+", "y") 0)
     ]
 
 testJson :: TestTree
