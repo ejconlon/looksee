@@ -62,6 +62,7 @@ module Looksie
   , stripStartP
   , stripEndP
   , measureP
+  , unconsP
   , headP
   , signedWithP
   , signedP
@@ -828,9 +829,24 @@ measureP p = do
   end <- getsP (rangeStart . stRange)
   pure (a, end - start)
 
--- | Takes exactly 1 character from the start of the range
+-- | Takes exactly 1 character from the start of the range, returning Nothing
+-- if at end of input
+unconsP :: Monad m => ParserT e m (Maybe Char)
+unconsP = stateP $ \st ->
+  let h = stHay st
+      mxy = T.uncons h
+  in  case mxy of
+        Nothing -> (Nothing, st)
+        Just (x, y) ->
+          let r = stRange st
+              r' = r {rangeStart = rangeStart r + 1}
+              st' = st {stHay = y, stRange = r'}
+          in  (Just x, st')
+
+-- | Takes exactly 1 character from the start of the range, throwing error
+-- if at end of input
 headP :: Monad m => ParserT e m Char
-headP = fmap T.head (takeExactP 1)
+headP = unconsP >>= maybe (errP (ReasonDemand 1 0)) pure
 
 -- | Add signed-ness to any parser with a negate function
 signedWithP :: Monad m => (a -> a) -> ParserT e m a -> ParserT e m a
