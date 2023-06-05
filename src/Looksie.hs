@@ -474,13 +474,13 @@ charP_ = void . charP
 
 -- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
 -- Chooses splits from START to END of range (see 'infixRP').
-splitNearP :: Monad m => Text -> ParserT e m a -> ParserT e m (Text, a)
-splitNearP tx pa = fmap (\(x, a, _) -> (x, a)) (infixRP tx pa (pure ()))
+splitNearP :: Monad m => Text -> ParserT e m a -> ParserT e m a
+splitNearP tx pa = fmap fst (infixRP tx pa (pure ()))
 
 -- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
 -- Chooses splits from END to START of range (see 'infixRP').
-splitFarP :: Monad m => Text -> ParserT e m a -> ParserT e m (Text, a)
-splitFarP tx pa = fmap (\(x, a, _) -> (x, a)) (infixLP tx pa (pure ()))
+splitFarP :: Monad m => Text -> ParserT e m a -> ParserT e m a
+splitFarP tx pa = fmap fst (infixLP tx pa (pure ()))
 
 -- | Split on every delimiter, parsing all segments with a narrowed range
 splitAllP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
@@ -490,21 +490,15 @@ splitAllP tx pa = go
     maas <- optInfixRP tx pa go
     case maas of
       Nothing -> fmap (maybe Empty Seq.singleton) (optP pa)
-      Just (_, a, as) -> pure (a :<| as)
+      Just (a, as) -> pure (a :<| as)
 
 -- | Like 'splitAllP' but ensures the sequence is at least length 1
 splitAll1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
-splitAll1P tx pa = go
- where
-  go = do
-    maas <- optInfixRP tx pa go
-    case maas of
-      Nothing -> fmap Seq.singleton pa
-      Just (_, a, as) -> pure (a :<| as)
+splitAll1P tx pa = fmap (uncurry (:<|)) (infixRP tx pa (splitAllP tx pa))
 
 -- | Like 'splitAllP' but ensures the sequence is at least length 2 (i.e. there was a delimiter)
 splitAll2P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
-splitAll2P tx pa = liftA2 (:<|) (pa <* textP tx) (splitAll1P tx pa)
+splitAll2P tx pa = fmap (uncurry (:<|)) (infixRP tx pa (splitAll1P tx pa))
 
 -- | Like 'splitAllP' but ensures a leading delimiter
 leadP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
@@ -561,7 +555,7 @@ subInfixP
   -> Text
   -> ParserT e m a
   -> ParserT e m b
-  -> (Either (Err e) (Maybe (Text, a, b)) -> T e m r)
+  -> (Either (Err e) (Maybe (a, b)) -> T e m r)
   -> St
   -> Seq (Int, InfixPhase, Err e)
   -> T e m r
@@ -570,7 +564,7 @@ subInfixP mov tx pa pb j st0 = goTry
   goTry errs = do
     stStart <- get
     -- TODO actually use breakOnAll
-    unParserT (measureP (textP tx)) $ \case
+    unParserT (measureP (textP_ tx)) $ \case
       Left _ -> goNext errs stStart
       Right (_, lenX) -> do
         let rng0 = stRange st0
@@ -593,7 +587,7 @@ subInfixP mov tx pa pb j st0 = goTry
             unParserT pb $ \case
               Left errB -> goNext (errs :|> (endA, InfixPhaseRight, errB)) stStart
               Right b -> do
-                ec <- tryT (j (Right (Just (tx, a, b))))
+                ec <- tryT (j (Right (Just (a, b))))
                 case ec of
                   Left errC -> goNext (errs :|> (endA, InfixPhaseCont, errC)) stStart
                   Right c -> pure c
@@ -609,14 +603,14 @@ subInfixP mov tx pa pb j st0 = goTry
         goTry errs
 
 -- private
-optInfixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (Text, a, b))
+optInfixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (a, b))
 optInfixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP (moveStFwd st0) tx pa pb j st0 Empty)
 
 -- private
 requireInfix
   :: Monad m
-  => (Either (Err e) (x, a, b) -> T e m r)
-  -> (Either (Err e) (Maybe (x, a, b)) -> T e m r)
+  => (Either (Err e) (a, b) -> T e m r)
+  -> (Either (Err e) (Maybe (a, b)) -> T e m r)
 requireInfix j = \case
   Right mxab ->
     case mxab of
@@ -625,13 +619,13 @@ requireInfix j = \case
   Left e -> j (Left e)
 
 -- | Right-associative infix parsing. Searches for the operator from START to END of range.
-infixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Text, a, b)
+infixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
 infixRP tx pa pb = ParserT $ \j -> do
   st0 <- get
   subInfixP (moveStFwd st0) tx pa pb (requireInfix j) st0 Empty
 
 -- | Left-associative infix parsing. Searches for the operator from END to START of range.
-infixLP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Text, a, b)
+infixLP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
 infixLP tx pa pb = ParserT $ \j -> do
   st0 <- get
   put (initStBwd st0)

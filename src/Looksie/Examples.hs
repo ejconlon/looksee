@@ -70,7 +70,7 @@ arithParser :: Parser Void Arith
 arithParser = stripP rootP
  where
   identP = takeWhile1P isAlpha
-  binaryP op f = (\(_, a, b) -> f a b) <$> infixRP op (stripEndP rootP) (stripStartP rootP)
+  binaryP op f = fmap (uncurry f) (infixRP op (stripEndP rootP) (stripStartP rootP))
   unaryP op f = textP_ op *> fmap f rootP
   rootP =
     altP

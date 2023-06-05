@@ -425,7 +425,7 @@ testInfixR :: [TestTree]
 testInfixR = fmap testParserCase cases
  where
   sub d = takeWhile1P (\c -> c == d || c == '+')
-  parser = fmap (\(_, xx, yy) -> (xx, yy)) (infixRP "+" (sub 'x') (sub 'y')) :: TestParser (Text, Text)
+  parser = infixRP "+" (sub 'x') (sub 'y') :: TestParser (Text, Text)
   cases =
     [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
     , ParserCase "fail delim" parser "xy" (err (Range 0 2) ReasonEmpty)
@@ -439,7 +439,7 @@ testInfixL :: [TestTree]
 testInfixL = fmap testParserCase cases
  where
   sub d = takeWhile1P (\c -> c == d || c == '+')
-  parser = fmap (\(_, xx, yy) -> (xx, yy)) (infixLP "+" (sub 'x') (sub 'y')) :: TestParser (Text, Text)
+  parser = infixLP "+" (sub 'x') (sub 'y') :: TestParser (Text, Text)
   cases =
     [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
     , ParserCase "match" parser "x+y" (suc ("x", "y") 0)
@@ -521,6 +521,15 @@ testSexp = testGroup "sexp" (fmap test cases)
     , ("pair nested list", "((1 1) (1 1))", Just (SexpList (Seq.fromList [pairList, pairList])))
     ]
 
+testArith :: TestTree
+testArith = testGroup "arith" (fmap test cases)
+ where
+  test (name, str, expected) = testCase name $ do
+    let actual = either (const Nothing) Just (parse arithParser str)
+    actual @?= expected
+  -- TODO add some cases!
+  cases = []
+
 main :: IO ()
 main =
   defaultMain $
@@ -529,4 +538,5 @@ main =
       [ testBasic
       , testJson
       , testSexp
+      , testArith
       ]
