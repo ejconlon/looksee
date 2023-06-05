@@ -28,10 +28,10 @@ module Looksie
   , greedy1P
   , lookP
   , labelP
-  , expectP
-  , expectP_
-  , expectHeadP
-  , expectHeadP_
+  , textP
+  , textP_
+  , charP
+  , charP_
   , splitNearP
   , splitFarP
   , splitAllP
@@ -453,82 +453,82 @@ labelP lab (ParserT g) = ParserT $ \j ->
     Right a -> j (Right a)
 
 -- | Expect the given text at the start of the range
-expectP :: Monad m => Text -> ParserT e m Text
-expectP n = do
+textP :: Monad m => Text -> ParserT e m Text
+textP n = do
   o <- takeP (T.length n)
   if n == o
     then pure n
     else errP (ReasonExpect n o)
 
 -- | Saves you from importing 'void'
-expectP_ :: Monad m => Text -> ParserT e m ()
-expectP_ = void . expectP
+textP_ :: Monad m => Text -> ParserT e m ()
+textP_ = void . textP
 
 -- | Expect the given character at the start of the range
-expectHeadP :: Monad m => Char -> ParserT e m Char
-expectHeadP = fmap T.head . expectP . T.singleton
+charP :: Monad m => Char -> ParserT e m Char
+charP = fmap T.head . textP . T.singleton
 
 -- | Saves you from importing 'void'
-expectHeadP_ :: Monad m => Char -> ParserT e m ()
-expectHeadP_ = void . expectHeadP
+charP_ :: Monad m => Char -> ParserT e m ()
+charP_ = void . charP
 
 -- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
 -- Chooses splits from START to END of range (see 'infixRP').
-splitNearP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
-splitNearP px pa = fmap (\(x, a, _) -> (x, a)) (infixRP px pa (pure ()))
+splitNearP :: Monad m => Text -> ParserT e m a -> ParserT e m (Text, a)
+splitNearP tx pa = fmap (\(x, a, _) -> (x, a)) (infixRP tx pa (pure ()))
 
 -- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
 -- Chooses splits from END to START of range (see 'infixRP').
-splitFarP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (x, a)
-splitFarP px pa = fmap (\(x, a, _) -> (x, a)) (infixLP px pa (pure ()))
+splitFarP :: Monad m => Text -> ParserT e m a -> ParserT e m (Text, a)
+splitFarP tx pa = fmap (\(x, a, _) -> (x, a)) (infixLP tx pa (pure ()))
 
 -- | Split on every delimiter, parsing all segments with a narrowed range
-splitAllP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-splitAllP px pa = go
+splitAllP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+splitAllP tx pa = go
  where
   go = do
-    maas <- optInfixRP px pa go
+    maas <- optInfixRP tx pa go
     case maas of
       Nothing -> fmap (maybe Empty Seq.singleton) (optP pa)
       Just (_, a, as) -> pure (a :<| as)
 
 -- | Like 'splitAllP' but ensures the sequence is at least length 1
-splitAll1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-splitAll1P px pa = go
+splitAll1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+splitAll1P tx pa = go
  where
   go = do
-    maas <- optInfixRP px pa go
+    maas <- optInfixRP tx pa go
     case maas of
       Nothing -> fmap Seq.singleton pa
       Just (_, a, as) -> pure (a :<| as)
 
 -- | Like 'splitAllP' but ensures the sequence is at least length 2 (i.e. there was a delimiter)
-splitAll2P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-splitAll2P px pa = liftA2 (:<|) (pa <* px) (splitAll1P px pa)
+splitAll2P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+splitAll2P tx pa = liftA2 (:<|) (pa <* textP tx) (splitAll1P tx pa)
 
 -- | Like 'splitAllP' but ensures a leading delimiter
-leadP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-leadP px pa = do
-  mu <- optP px
+leadP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+leadP tx pa = do
+  mu <- optP (textP tx)
   case mu of
     Nothing -> pure Empty
-    Just _ -> splitAll1P px pa
+    Just _ -> splitAll1P tx pa
 
 -- | Like 'splitAll1P' but ensures a leading delimiter
-lead1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-lead1P px pa = px *> splitAll1P px pa
+lead1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+lead1P tx pa = textP tx *> splitAll1P tx pa
 
 -- | Like 'splitAllP' but ensures a trailing delimiter
-trailP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-trailP px pa = do
-  as <- splitAllP px pa
+trailP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+trailP tx pa = do
+  as <- splitAllP tx pa
   case as of
     Empty -> pure Empty
-    _ -> as <$ px
+    _ -> as <$ textP tx
 
 -- | Like 'splitAll1P' but ensures a trailing delimiter
-trail1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-trail1P px pa = splitAll1P px pa <* px
+trail1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+trail1P tx pa = splitAll1P tx pa <* textP tx
 
 -- private
 moveStFwd :: St -> St -> Maybe St
@@ -558,20 +558,21 @@ moveStBwd st0 st =
 subInfixP
   :: Monad m
   => (St -> Maybe St)
-  -> ParserT e m x
+  -> Text
   -> ParserT e m a
   -> ParserT e m b
-  -> (Either (Err e) (Maybe (x, a, b)) -> T e m r)
+  -> (Either (Err e) (Maybe (Text, a, b)) -> T e m r)
   -> St
   -> Seq (Int, InfixPhase, Err e)
   -> T e m r
-subInfixP mov px pa pb j st0 = goTry
+subInfixP mov tx pa pb j st0 = goTry
  where
   goTry errs = do
     stStart <- get
-    unParserT (measureP px) $ \case
+    -- TODO actually use breakOnAll
+    unParserT (measureP (textP tx)) $ \case
       Left _ -> goNext errs stStart
-      Right (x, lenX) -> do
+      Right (_, lenX) -> do
         let rng0 = stRange st0
             srt0 = rangeStart rng0
             hay0 = stHay st0
@@ -592,7 +593,7 @@ subInfixP mov px pa pb j st0 = goTry
             unParserT pb $ \case
               Left errB -> goNext (errs :|> (endA, InfixPhaseRight, errB)) stStart
               Right b -> do
-                ec <- tryT (j (Right (Just (x, a, b))))
+                ec <- tryT (j (Right (Just (tx, a, b))))
                 case ec of
                   Left errC -> goNext (errs :|> (endA, InfixPhaseCont, errC)) stStart
                   Right c -> pure c
@@ -608,8 +609,8 @@ subInfixP mov px pa pb j st0 = goTry
         goTry errs
 
 -- private
-optInfixRP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (x, a, b))
-optInfixRP px pa pb = ParserT (\j -> get >>= \st0 -> subInfixP (moveStFwd st0) px pa pb j st0 Empty)
+optInfixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (Text, a, b))
+optInfixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP (moveStFwd st0) tx pa pb j st0 Empty)
 
 -- private
 requireInfix
@@ -624,17 +625,17 @@ requireInfix j = \case
   Left e -> j (Left e)
 
 -- | Right-associative infix parsing. Searches for the operator from START to END of range.
-infixRP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m b -> ParserT e m (x, a, b)
-infixRP px pa pb = ParserT $ \j -> do
+infixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Text, a, b)
+infixRP tx pa pb = ParserT $ \j -> do
   st0 <- get
-  subInfixP (moveStFwd st0) px pa pb (requireInfix j) st0 Empty
+  subInfixP (moveStFwd st0) tx pa pb (requireInfix j) st0 Empty
 
 -- | Left-associative infix parsing. Searches for the operator from END to START of range.
-infixLP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m b -> ParserT e m (x, a, b)
-infixLP px pa pb = ParserT $ \j -> do
+infixLP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Text, a, b)
+infixLP tx pa pb = ParserT $ \j -> do
   st0 <- get
   put (initStBwd st0)
-  subInfixP (moveStBwd st0) px pa pb (requireInfix j) st0 Empty
+  subInfixP (moveStBwd st0) tx pa pb (requireInfix j) st0 Empty
 
 -- | Take the given number of characters from the start of the range, or fewer if empty
 takeP :: Monad m => Int -> ParserT e m Text
@@ -759,7 +760,7 @@ data StrState = StrState !Bool !(Seq Char)
 -- | Parse a string with a custom quote character. Supports backslash-escaping.
 strP :: Monad m => Char -> ParserT e m Text
 strP d = do
-  expectP_ (T.singleton d)
+  textP_ (T.singleton d)
   scopeP (StrState False Empty) $ iterP $ do
     c <- headP
     state $ \ss@(StrState esc buf) ->
@@ -851,7 +852,7 @@ headP = unconsP >>= maybe (errP (ReasonDemand 1 0)) pure
 -- | Add signed-ness to any parser with a negate function
 signedWithP :: Monad m => (a -> a) -> ParserT e m a -> ParserT e m a
 signedWithP neg p = do
-  ms <- optP (expectHeadP '-')
+  ms <- optP (charP '-')
   case ms of
     Nothing -> p
     Just _ -> fmap neg p
@@ -876,7 +877,7 @@ decP = signedP udecP
 udecP :: Monad m => ParserT e m Rational
 udecP = do
   whole <- fmap fromInteger uintP
-  hasDot <- fmap isJust (optP (expectHeadP '.'))
+  hasDot <- fmap isJust (optP (charP '.'))
   if hasDot
     then do
       (numerator, places) <- measureP uintP
@@ -893,9 +894,9 @@ sciP = signedP usciP
 usciP :: Monad m => ParserT e m Scientific
 usciP = do
   whole <- uintP
-  hasDot <- fmap isJust (optP (expectHeadP_ '.'))
+  hasDot <- fmap isJust (optP (charP_ '.'))
   (frac, places) <- if hasDot then measureP uintP else pure (0, 0)
-  hasEx <- fmap isJust (optP (expectHeadP_ 'e' <|> expectHeadP_ 'E'))
+  hasEx <- fmap isJust (optP (charP_ 'e' <|> charP_ 'E'))
   ex <- if hasEx then fmap fromIntegral intP else pure 0
   let wholeS = S.scientific whole ex
       partS = S.scientific frac (ex - places)
@@ -909,9 +910,9 @@ numP = signedWithP (bimap negate negate) unumP
 unumP :: Monad m => ParserT e m (Either Integer Scientific)
 unumP = do
   whole <- uintP
-  hasDot <- fmap isJust (optP (expectHeadP_ '.'))
+  hasDot <- fmap isJust (optP (charP_ '.'))
   mayFracPlaces <- if hasDot then fmap Just (measureP uintP) else pure Nothing
-  hasEx <- fmap isJust (optP (expectHeadP_ 'e' <|> expectHeadP_ 'E'))
+  hasEx <- fmap isJust (optP (charP_ 'e' <|> charP_ 'E'))
   mayEx <- if hasEx then fmap (Just . fromIntegral) intP else pure Nothing
   case (mayFracPlaces, mayEx) of
     (Nothing, Nothing) -> pure (Left whole)

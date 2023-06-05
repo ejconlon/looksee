@@ -158,7 +158,7 @@ testEnd = fmap testParserCase cases
 testExpectHead :: [TestTree]
 testExpectHead = fmap testParserCase cases
  where
-  parser = expectHeadP 'h'
+  parser = charP 'h'
   cases =
     [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "h" ""))
     , ParserCase "non-empty" parser "hi" (suc 'h' 1)
@@ -168,7 +168,7 @@ testExpectHead = fmap testParserCase cases
 testExpect :: [TestTree]
 testExpect = fmap testParserCase cases
  where
-  parser = expectP "hi"
+  parser = textP "hi"
   cases =
     [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "hi" ""))
     , ParserCase "non-empty" parser "hi" (suc "hi" 0)
@@ -181,7 +181,7 @@ testExpect = fmap testParserCase cases
 testGreedy :: [TestTree]
 testGreedy = fmap testParserCase cases
  where
-  parser = fmap (T.pack . toList) (greedyP (expectHeadP 'h')) :: TestParser Text
+  parser = fmap (T.pack . toList) (greedyP (charP 'h')) :: TestParser Text
   cases =
     [ ParserCase "empty" parser "" (suc "" 0)
     , ParserCase "non-empty" parser "hi" (suc "h" 1)
@@ -193,7 +193,7 @@ testGreedy = fmap testParserCase cases
 testGreedy1 :: [TestTree]
 testGreedy1 = fmap testParserCase cases
  where
-  parser = fmap (T.pack . toList) (greedy1P (expectHeadP 'h')) :: TestParser Text
+  parser = fmap (T.pack . toList) (greedy1P (charP 'h')) :: TestParser Text
   cases =
     [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "h" ""))
     , ParserCase "non-empty" parser "hi" (suc "h" 1)
@@ -205,7 +205,7 @@ testGreedy1 = fmap testParserCase cases
 testOr :: [TestTree]
 testOr = fmap testParserCase cases
  where
-  parser = expectP "h" <|> expectP "xi" :: TestParser Text
+  parser = textP "h" <|> textP "xi" :: TestParser Text
   cases =
     [ ParserCase "empty" parser "" $
         errAlt
@@ -226,7 +226,7 @@ testOr = fmap testParserCase cases
 testAlt :: [TestTree]
 testAlt = fmap testParserCase cases
  where
-  parser = altP [expectP "h", "y" <$ headP, expectP "xi"] :: TestParser Text
+  parser = altP [textP "h", "y" <$ headP, textP "xi"] :: TestParser Text
   cases =
     [ ParserCase "empty" parser "" $
         errAlt
@@ -252,7 +252,7 @@ testOptEmpty = fmap testParserCase cases
 testOpt :: [TestTree]
 testOpt = fmap testParserCase cases
  where
-  parser = optP (expectHeadP 'h') :: TestParser (Maybe Char)
+  parser = optP (charP 'h') :: TestParser (Maybe Char)
   cases =
     [ ParserCase "non-match empty" parser "" (suc Nothing 0)
     , ParserCase "match" parser "hi" (suc (Just 'h') 1)
@@ -262,7 +262,7 @@ testOpt = fmap testParserCase cases
 testBind1 :: [TestTree]
 testBind1 = fmap testParserCase cases
  where
-  parser = expectHeadP 'x' >>= \c -> pure [c, c]
+  parser = charP 'x' >>= \c -> pure [c, c]
   cases =
     [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "x" ""))
     , ParserCase "first" parser "hi" (err (Range 1 2) (ReasonExpect "x" "h"))
@@ -340,7 +340,7 @@ testThrowMixedFlip = fmap testParserCase cases
 testBacktrack :: [TestTree]
 testBacktrack = fmap testParserCase cases
  where
-  parser = (expectP "x" <|> expectP "xz") <* (expectP_ "z" *> endP)
+  parser = (textP "x" <|> textP "xz") <* (textP_ "z" *> endP)
   cases =
     [ ParserCase "non-empty" parser "xzz" (suc "xz" 0)
     ]
@@ -425,7 +425,7 @@ testInfixR :: [TestTree]
 testInfixR = fmap testParserCase cases
  where
   sub d = takeWhile1P (\c -> c == d || c == '+')
-  parser = fmap (\(_, xx, yy) -> (xx, yy)) (infixRP (expectHeadP '+') (sub 'x') (sub 'y')) :: TestParser (Text, Text)
+  parser = fmap (\(_, xx, yy) -> (xx, yy)) (infixRP "+" (sub 'x') (sub 'y')) :: TestParser (Text, Text)
   cases =
     [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
     , ParserCase "fail delim" parser "xy" (err (Range 0 2) ReasonEmpty)
@@ -439,7 +439,7 @@ testInfixL :: [TestTree]
 testInfixL = fmap testParserCase cases
  where
   sub d = takeWhile1P (\c -> c == d || c == '+')
-  parser = fmap (\(_, xx, yy) -> (xx, yy)) (infixLP (expectHeadP '+') (sub 'x') (sub 'y')) :: TestParser (Text, Text)
+  parser = fmap (\(_, xx, yy) -> (xx, yy)) (infixLP "+" (sub 'x') (sub 'y')) :: TestParser (Text, Text)
   cases =
     [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
     , ParserCase "match" parser "x+y" (suc ("x", "y") 0)
