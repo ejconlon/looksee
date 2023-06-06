@@ -4,6 +4,7 @@
 module Main (main) where
 
 import Control.Applicative (Alternative (..), liftA2)
+import Data.Bifunctor (first)
 import Data.Foldable (toList)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
@@ -85,8 +86,11 @@ testBasic =
       , ("dropWhile", testDropWhile)
       , ("dropWhile1", testDropWhile1)
       , ("infixR", testInfixR)
-      -- TODO resurrect this with more efficient breaking
-      -- , ("infixL", testInfixL)
+      , ("someInfixR", testSomeInfixR)
+      , ("break", testBreak)
+      , ("someBreak", testSomeBreak)
+      , ("split", testSplit)
+      , ("split1", testSplit1)
       ]
 
 testEmpty :: [TestTree]
@@ -427,6 +431,8 @@ testInfixR = fmap testParserCase cases
  where
   sub d = takeWhile1P (\c -> c == d || c == '+')
   parser = infixRP "+" (sub 'x') (sub 'y') :: TestParser (Text, Text)
+  parserR = infixRP "+" (textP "x") (textP "x+x") :: TestParser (Text, Text)
+  parserL = infixRP "+" (textP "x+x") (textP "x") :: TestParser (Text, Text)
   cases =
     [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
     , ParserCase "fail delim" parser "xy" (err (Range 0 2) ReasonEmpty)
@@ -434,22 +440,85 @@ testInfixR = fmap testParserCase cases
     , ParserCase "fail second" parser "x+" (errInfix (Range 0 2) [(1, InfixPhaseRight, Range 2 2, ReasonTakeNone)])
     , ParserCase "match" parser "x+y" (suc ("x", "y") 0)
     , ParserCase "match multi" parser "x++y" (suc ("x", "+y") 0)
+    , ParserCase "match rassoc" parserR "x+x+x" (suc ("x", "x+x") 0)
+    , ParserCase "fail lassoc" parserL "x+x+x" (errInfix (Range 0 5) [(1, InfixPhaseLeft, Range 1 1, ReasonExpect "x+x" "x")])
     ]
 
--- TODO resurrect this with more efficient breaking
--- testInfixL :: [TestTree]
--- testInfixL = fmap testParserCase cases
---  where
---   sub d = takeWhile1P (\c -> c == d || c == '+')
---   parser = infixLP "+" (sub 'x') (sub 'y') :: TestParser (Text, Text)
---   cases =
---     [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
---     , ParserCase "match" parser "x+y" (suc ("x", "y") 0)
---     , ParserCase "fail delim" parser "xy" (err (Range 0 2) ReasonEmpty)
---     , ParserCase "fail first" parser "+y" (errInfix (Range 0 2) [(0, InfixPhaseLeft, Range 0 0, ReasonTakeNone)])
---     , ParserCase "fail second" parser "x+" (errInfix (Range 0 2) [(1, InfixPhaseRight, Range 2 2, ReasonTakeNone)])
---     , ParserCase "match multi" parser "x++y" (suc ("x+", "y") 0)
---     ]
+testSomeInfixR :: [TestTree]
+testSomeInfixR = fmap testParserCase cases
+ where
+  sub d = takeWhile1P (\c -> c == d || c == '+')
+  parser = someInfixRP "+" (sub 'x') (sub 'y') :: TestParser (Text, Text)
+  parserR = someInfixRP "+" (textP "x") (textP "x+x") :: TestParser (Text, Text)
+  parserL = someInfixRP "+" (textP "x+x") (textP "x") :: TestParser (Text, Text)
+  cases =
+    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
+    , ParserCase "fail delim" parser "xy" (err (Range 0 2) ReasonEmpty)
+    , ParserCase "fail first" parser "+y" (errInfix (Range 0 2) [(0, InfixPhaseLeft, Range 0 0, ReasonTakeNone)])
+    , ParserCase "fail second" parser "x+" (errInfix (Range 0 2) [(1, InfixPhaseRight, Range 2 2, ReasonTakeNone)])
+    , ParserCase "match" parser "x+y" (suc ("x", "y") 0)
+    , ParserCase "match multi" parser "x++y" (suc ("x", "+y") 0)
+    , ParserCase "match rassoc" parserR "x+x+x" (suc ("x", "x+x") 0)
+    , ParserCase "match lassoc" parserL "x+x+x" (suc ("x+x", "x") 0)
+    ]
+
+testBreak :: [TestTree]
+testBreak = fmap testParserCase cases
+ where
+  parser = breakP "+" (takeWhile1P (== 'x'))
+  parserR = breakP "+" (textP "x")
+  parserL = breakP "+" (textP "x+x")
+  cases =
+    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
+    , ParserCase "fail delim" parser "x" (err (Range 0 1) ReasonEmpty)
+    , ParserCase "fail first" parser "y+" (errInfix (Range 0 2) [(1, InfixPhaseLeft, Range 0 1, ReasonTakeNone)])
+    , ParserCase "match" parser "x+x+y" (suc "x" 3)
+    , ParserCase "match rassoc" parserR "x+x+x" (suc "x" 3)
+    , ParserCase "fail lassoc" parserL "x+x+x" (errInfix (Range 0 5) [(1, InfixPhaseLeft, Range 1 1, ReasonExpect "x+x" "x")])
+    ]
+
+testSomeBreak :: [TestTree]
+testSomeBreak = fmap testParserCase cases
+ where
+  parser = someBreakP "+" (takeWhile1P (== 'x'))
+  parserR = someBreakP "+" (textP "x")
+  parserL = someBreakP "+" (textP "x+x")
+  cases =
+    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
+    , ParserCase "fail delim" parser "x" (err (Range 0 1) ReasonEmpty)
+    , ParserCase "fail first" parser "y+" (errInfix (Range 0 2) [(1, InfixPhaseLeft, Range 0 1, ReasonTakeNone)])
+    , ParserCase "match" parser "x+x+y" (suc "x" 3)
+    , ParserCase "match rassoc" parserR "x+x+x" (suc "x" 3)
+    , ParserCase "match lassoc" parserL "x+x+x" (suc "x+x" 1)
+    ]
+
+testSplit :: [TestTree]
+testSplit = fmap testParserCase cases
+ where
+  parser = fmap (first toList) (splitP "+" (takeWhileP (== 'x')))
+  cases =
+    [ ParserCase "empty" parser "" (suc ([""], True) 0)
+    , ParserCase "single" parser "x" (suc (["x"], True) 0)
+    , ParserCase "fail" parser "xy" (suc ([], False) 2)
+    , ParserCase "double" parser "x+x" (suc (["x", "x"], True) 0)
+    , ParserCase "triple" parser "x+x+x" (suc (["x", "x", "x"], True) 0)
+    , ParserCase "fail first" parser "y+x" (suc ([], False) 3)
+    , ParserCase "fail second" parser "x+y" (suc (["x"], False) 2)
+    ]
+
+testSplit1 :: [TestTree]
+testSplit1 = fmap testParserCase cases
+ where
+  parser = fmap (first toList) (split1P "+" (takeWhileP (== 'x')))
+  cases =
+    [ ParserCase "empty" parser "" (suc ([""], True) 0)
+    , ParserCase "single" parser "x" (suc (["x"], True) 0)
+    , ParserCase "fail" parser "xy" (err (Range 0 2) (ReasonSplitComp SplitCompGE 1 "+" 0))
+    , ParserCase "double" parser "x+x" (suc (["x", "x"], True) 0)
+    , ParserCase "triple" parser "x+x+x" (suc (["x", "x", "x"], True) 0)
+    , ParserCase "fail first" parser "y+x" (err (Range 0 3) (ReasonSplitComp SplitCompGE 1 "+" 0))
+    , ParserCase "fail second" parser "x+y" (suc (["x"], False) 2)
+    ]
 
 testJson :: TestTree
 testJson = testGroup "json" (fmap test cases)
@@ -530,7 +599,9 @@ testArith = testGroup "arith" (fmap test cases)
     let actual = either (const Nothing) Just (parse arithParser str)
     actual @?= expected
   cases =
-    [ ("plus", "1 + x", Just (ArithAdd (ArithNum 1) (ArithVar "x")))
+    [ ("plus", "1 +x+ 2", Just (ArithAdd (ArithNum 1) (ArithAdd (ArithVar "x") (ArithNum 2))))
+    , ("prec1", "1 + 2 * 3", Just (ArithAdd (ArithNum 1) (ArithMul (ArithNum 2) (ArithNum 3))))
+    , ("prec2", "1 * 2 + 3", Just (ArithAdd (ArithMul (ArithNum 1) (ArithNum 2)) (ArithNum 3)))
     ]
 
 main :: IO ()

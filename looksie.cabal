@@ -1,6 +1,6 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.35.1.
+-- This file has been generated from package.yaml by hpack version 0.35.2.
 --
 -- see: https://github.com/sol/hpack
 
@@ -60,15 +60,15 @@ library
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds
   build-depends:
       base >=4.12 && <5
-    , bifunctors
-    , containers
-    , errata
-    , mmorph
-    , mtl
-    , recursion-schemes
-    , scientific
-    , text
-    , vector
+    , bifunctors ==5.5.*
+    , containers ==0.6.*
+    , errata ==0.4.*
+    , mmorph ==1.2.*
+    , mtl ==2.2.*
+    , recursion-schemes ==5.2.*
+    , scientific ==0.3.*
+    , text >=1.2 && <2.1
+    , vector ==0.12.*
   default-language: GHC2021
 
 test-suite looksie-test
@@ -106,16 +106,16 @@ test-suite looksie-test
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.12 && <5
-    , bifunctors
-    , containers
-    , errata
+    , bifunctors ==5.5.*
+    , containers ==0.6.*
+    , errata ==0.4.*
     , looksie
-    , mmorph
-    , mtl
-    , recursion-schemes
-    , scientific
+    , mmorph ==1.2.*
+    , mtl ==2.2.*
+    , recursion-schemes ==5.2.*
+    , scientific ==0.3.*
     , tasty
     , tasty-hunit
-    , text
-    , vector
+    , text >=1.2 && <2.1
+    , vector ==0.12.*
   default-language: GHC2021
