@@ -4,12 +4,12 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 
-name:           looksie
+name:           looksee
 version:        0.1.0
-synopsis:       parser with looksie
-description:    Please see the README on GitHub at <https://github.com/ejconlon/looksie#readme>
-homepage:       https://github.com/ejconlon/looksie#readme
-bug-reports:    https://github.com/ejconlon/looksie/issues
+synopsis:       parser with looksee
+description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
+homepage:       https://github.com/ejconlon/looksee#readme
+bug-reports:    https://github.com/ejconlon/looksee/issues
 author:         Eric Conlon
 maintainer:     ejconlon@gmail.com
 copyright:      (c) 2023 Eric Conlon
@@ -22,14 +22,14 @@ extra-source-files:
 
 source-repository head
   type: git
-  location: https://github.com/ejconlon/looksie
+  location: https://github.com/ejconlon/looksee
 
 library
   exposed-modules:
-      Looksie
-      Looksie.Examples
+      Looksee
+      Looksee.Examples
   other-modules:
-      Paths_looksie
+      Paths_looksee
   hs-source-dirs:
       src
   default-extensions:
@@ -71,11 +71,11 @@ library
     , vector ==0.12.*
   default-language: GHC2021
 
-test-suite looksie-test
+test-suite looksee-test
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
-      Paths_looksie
+      Paths_looksee
   hs-source-dirs:
       test
   default-extensions:
@@ -109,7 +109,7 @@ test-suite looksie-test
     , bifunctors ==5.5.*
     , containers ==0.6.*
     , errata ==0.4.*
-    , looksie
+    , looksee
     , mmorph ==1.2.*
     , mtl ==2.2.*
     , recursion-schemes ==5.2.*

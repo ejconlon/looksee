@@ -11,8 +11,8 @@ import Data.Sequence qualified as Seq
 import Data.String (IsString)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Looksie
-import Looksie.Examples
+import Looksee
+import Looksee.Examples
 import Test.Tasty (TestName, TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
 
@@ -608,7 +608,7 @@ main :: IO ()
 main =
   defaultMain $
     testGroup
-      "Looksie"
+      "Looksee"
       [ testBasic
       , testJson
       , testSexp

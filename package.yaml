@@ -1,13 +1,13 @@
-name: looksie
+name: looksee
 version: 0.1.0
 
-github: ejconlon/looksie
+github: ejconlon/looksee
 license: AllRightsReserved
 author: Eric Conlon
 maintainer: ejconlon@gmail.com
 copyright: (c) 2023 Eric Conlon
-synopsis: parser with looksie
-description: Please see the README on GitHub at <https://github.com/ejconlon/looksie#readme>
+synopsis: parser with looksee
+description: Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 tested-with: GHC == 9.2.7
 
 language: GHC2021
@@ -67,7 +67,7 @@ library:
   source-dirs: src
 
 tests:
-  looksie-test:
+  looksee-test:
     main: Main.hs
     source-dirs: test
     ghc-options:
@@ -75,6 +75,6 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - looksie
+    - looksee
     - tasty
     - tasty-hunit

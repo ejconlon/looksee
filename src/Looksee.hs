@@ -3,7 +3,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 
 -- | A simple text parser with decent errors
-module Looksie
+module Looksee
   ( Label (..)
   , Range (..)
   , range

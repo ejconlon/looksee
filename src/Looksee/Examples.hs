@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Example parsers
-module Looksie.Examples
+module Looksee.Examples
   ( Json (..)
   , jsonParser
   , Arith (..)
@@ -18,7 +18,7 @@ import Data.Scientific (Scientific)
 import Data.Sequence (Seq)
 import Data.Text (Text)
 import Data.Void (Void)
-import Looksie (Parser, altP, betweenP, decP, doubleStrP, infixRP, intP, labelP, sciP, sepByP, space1P, stripEndP, stripP, stripStartP, takeWhile1P, textP_)
+import Looksee (Parser, altP, betweenP, decP, doubleStrP, infixRP, intP, labelP, sciP, sepByP, space1P, stripEndP, stripP, stripStartP, takeWhile1P, textP_)
 
 -- | A JSON value
 data Json
