@@ -13,7 +13,7 @@ bug-reports:    https://github.com/ejconlon/looksee/issues
 author:         Eric Conlon
 maintainer:     ejconlon@gmail.com
 copyright:      (c) 2023 Eric Conlon
-license:        AllRightsReserved
+license:        BSD3
 build-type:     Simple
 tested-with:
     GHC == 9.2.7

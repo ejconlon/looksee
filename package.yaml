@@ -2,7 +2,7 @@ name: looksee
 version: 0.1.0
 
 github: ejconlon/looksee
-license: AllRightsReserved
+license: BSD3
 author: Eric Conlon
 maintainer: ejconlon@gmail.com
 copyright: (c) 2023 Eric Conlon
