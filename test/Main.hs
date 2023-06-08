@@ -4,6 +4,7 @@
 module Main (main) where
 
 import Control.Applicative (Alternative (..), liftA2)
+import Control.Exception (throwIO)
 import Data.Bifunctor (first)
 import Data.Foldable (toList)
 import Data.Sequence (Seq (..))
@@ -11,6 +12,7 @@ import Data.Sequence qualified as Seq
 import Data.String (IsString)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Void (Void)
 import Looksee
 import Looksee.Examples
 import Test.Tasty (TestName, TestTree, defaultMain, testGroup)
@@ -24,20 +26,20 @@ type TestResult = Either (Err Error)
 
 data ParserCase a = ParserCase !TestName !(TestParser a) !Text !(TestResult (a, Int))
 
-err :: Range -> Reason Error (Err Error) -> TestResult (a, Int)
+err :: Span Int -> Reason Error (Err Error) -> TestResult (a, Int)
 err ra re = Left (Err (ErrF ra re))
 
-errAlt :: Range -> [(AltPhase, Range, Reason Error (Err Error))] -> TestResult (a, Int)
+errAlt :: Span Int -> [(AltPhase, Span Int, Reason Error (Err Error))] -> TestResult (a, Int)
 errAlt ra tups = Left (Err (ErrF ra (ReasonAlt (Seq.fromList (fmap f tups)))))
  where
   f (ap, ra', re) = (ap, Err (ErrF ra' re))
 
-errInfix :: Range -> [(Int, InfixPhase, Range, Reason Error (Err Error))] -> TestResult (a, Int)
+errInfix :: Span Int -> [(Int, InfixPhase, Span Int, Reason Error (Err Error))] -> TestResult (a, Int)
 errInfix ra tups = Left (Err (ErrF ra (ReasonInfix (Seq.fromList (fmap f tups)))))
  where
   f (ix, ip, ra', re) = (ix, ip, Err (ErrF ra' re))
 
-errLook :: Range -> Range -> Reason Error (Err Error) -> TestResult (a, Int)
+errLook :: Span Int -> Span Int -> Reason Error (Err Error) -> TestResult (a, Int)
 errLook ra1 ra2 re = Left (Err (ErrF ra1 (ReasonLook (Err (ErrF ra2 re)))))
 
 suc :: a -> Int -> TestResult (a, Int)
@@ -98,8 +100,8 @@ testEmpty = fmap testParserCase cases
  where
   parser = emptyP :: TestParser Int
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
-    , ParserCase "non-empty" parser "hi" (err (Range 0 2) ReasonEmpty)
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonEmpty)
+    , ParserCase "non-empty" parser "hi" (err (Span 0 2) ReasonEmpty)
     ]
 
 testPure :: [TestTree]
@@ -116,8 +118,8 @@ testFail = fmap testParserCase cases
  where
   parser = fail "i give up" :: TestParser Int
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonFail "i give up"))
-    , ParserCase "non-empty" parser "hi" (err (Range 0 2) (ReasonFail "i give up"))
+    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonFail "i give up"))
+    , ParserCase "non-empty" parser "hi" (err (Span 0 2) (ReasonFail "i give up"))
     ]
 
 testHead :: [TestTree]
@@ -125,7 +127,7 @@ testHead = fmap testParserCase cases
  where
   parser = headP
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonDemand 1 0))
+    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonDemand 1 0))
     , ParserCase "non-empty" parser "hi" (suc 'h' 1)
     ]
 
@@ -157,7 +159,7 @@ testEnd = fmap testParserCase cases
   parser = endP
   cases =
     [ ParserCase "empty" parser "" (suc () 0)
-    , ParserCase "non-empty" parser "hi" (err (Range 0 2) (ReasonLeftover 2))
+    , ParserCase "non-empty" parser "hi" (err (Span 0 2) (ReasonLeftover 2))
     ]
 
 testExpectHead :: [TestTree]
@@ -165,9 +167,9 @@ testExpectHead = fmap testParserCase cases
  where
   parser = charP 'h'
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "h" ""))
+    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonExpect "h" ""))
     , ParserCase "non-empty" parser "hi" (suc 'h' 1)
-    , ParserCase "non-match" parser "bye" (err (Range 1 3) (ReasonExpect "h" "b"))
+    , ParserCase "non-match" parser "bye" (err (Span 1 3) (ReasonExpect "h" "b"))
     ]
 
 testExpect :: [TestTree]
@@ -175,12 +177,12 @@ testExpect = fmap testParserCase cases
  where
   parser = textP "hi"
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "hi" ""))
+    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonExpect "hi" ""))
     , ParserCase "non-empty" parser "hi" (suc "hi" 0)
     , ParserCase "prefix" parser "hiya" (suc "hi" 2)
-    , ParserCase "partial" parser "hey" (err (Range 2 3) (ReasonExpect "hi" "he"))
-    , ParserCase "non-match" parser "bye" (err (Range 2 3) (ReasonExpect "hi" "by"))
-    , ParserCase "short" parser "h" (err (Range 1 1) (ReasonExpect "hi" "h"))
+    , ParserCase "partial" parser "hey" (err (Span 2 3) (ReasonExpect "hi" "he"))
+    , ParserCase "non-match" parser "bye" (err (Span 2 3) (ReasonExpect "hi" "by"))
+    , ParserCase "short" parser "h" (err (Span 1 1) (ReasonExpect "hi" "h"))
     ]
 
 testGreedy :: [TestTree]
@@ -200,11 +202,11 @@ testGreedy1 = fmap testParserCase cases
  where
   parser = fmap (T.pack . toList) (greedy1P (charP 'h')) :: TestParser Text
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "h" ""))
+    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonExpect "h" ""))
     , ParserCase "non-empty" parser "hi" (suc "h" 1)
     , ParserCase "repeat" parser "hhi" (suc "hh" 1)
     , ParserCase "full" parser "hhh" (suc "hhh" 0)
-    , ParserCase "non-match" parser "bye" (err (Range 1 3) (ReasonExpect "h" "b"))
+    , ParserCase "non-match" parser "bye" (err (Span 1 3) (ReasonExpect "h" "b"))
     ]
 
 testOr :: [TestTree]
@@ -214,17 +216,17 @@ testOr = fmap testParserCase cases
   cases =
     [ ParserCase "empty" parser "" $
         errAlt
-          (Range 0 0)
-          [ (AltPhaseBranch, Range 0 0, ReasonExpect "h" "")
-          , (AltPhaseBranch, Range 0 0, ReasonExpect "xi" "")
+          (Span 0 0)
+          [ (AltPhaseBranch, Span 0 0, ReasonExpect "h" "")
+          , (AltPhaseBranch, Span 0 0, ReasonExpect "xi" "")
           ]
     , ParserCase "first" parser "hi" (suc "h" 1)
     , ParserCase "second" parser "xi" (suc "xi" 0)
     , ParserCase "non-match" parser "bye" $
         errAlt
-          (Range 0 3)
-          [ (AltPhaseBranch, Range 1 3, ReasonExpect "h" "b")
-          , (AltPhaseBranch, Range 2 3, ReasonExpect "xi" "by")
+          (Span 0 3)
+          [ (AltPhaseBranch, Span 1 3, ReasonExpect "h" "b")
+          , (AltPhaseBranch, Span 2 3, ReasonExpect "xi" "by")
           ]
     ]
 
@@ -235,10 +237,10 @@ testAlt = fmap testParserCase cases
   cases =
     [ ParserCase "empty" parser "" $
         errAlt
-          (Range 0 0)
-          [ (AltPhaseBranch, Range 0 0, ReasonExpect "h" "")
-          , (AltPhaseBranch, Range 0 0, ReasonDemand 1 0)
-          , (AltPhaseBranch, Range 0 0, ReasonExpect "xi" "")
+          (Span 0 0)
+          [ (AltPhaseBranch, Span 0 0, ReasonExpect "h" "")
+          , (AltPhaseBranch, Span 0 0, ReasonDemand 1 0)
+          , (AltPhaseBranch, Span 0 0, ReasonExpect "xi" "")
           ]
     , ParserCase "first" parser "hi" (suc "h" 1)
     , ParserCase "middle" parser "zi" (suc "y" 1)
@@ -269,8 +271,8 @@ testBind1 = fmap testParserCase cases
  where
   parser = charP 'x' >>= \c -> pure [c, c]
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonExpect "x" ""))
-    , ParserCase "first" parser "hi" (err (Range 1 2) (ReasonExpect "x" "h"))
+    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonExpect "x" ""))
+    , ParserCase "first" parser "hi" (err (Span 1 2) (ReasonExpect "x" "h"))
     , ParserCase "second" parser "xi" (suc "xx" 1)
     ]
 
@@ -279,8 +281,8 @@ testBind2 = fmap testParserCase cases
  where
   parser = headP >>= \x -> if x == 'x' then pure 'y' else emptyP
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonDemand 1 0))
-    , ParserCase "first" parser "hi" (err (Range 1 2) ReasonEmpty)
+    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonDemand 1 0))
+    , ParserCase "first" parser "hi" (err (Span 1 2) ReasonEmpty)
     , ParserCase "second" parser "xi" (suc 'y' 1)
     ]
 
@@ -290,8 +292,8 @@ testThrow = fmap testParserCase cases
   cust = Error "boo"
   parser = throwP cust :: TestParser Int
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonCustom cust))
-    , ParserCase "non-empty" parser "hi" (err (Range 0 2) (ReasonCustom cust))
+    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonCustom cust))
+    , ParserCase "non-empty" parser "hi" (err (Span 0 2) (ReasonCustom cust))
     ]
 
 testConsumeThrow :: [TestTree]
@@ -300,8 +302,8 @@ testConsumeThrow = fmap testParserCase cases
   cust = Error "boo"
   parser = headP *> throwP cust :: TestParser Int
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) (ReasonDemand 1 0))
-    , ParserCase "non-empty" parser "hi" (err (Range 1 2) (ReasonCustom cust))
+    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonDemand 1 0))
+    , ParserCase "non-empty" parser "hi" (err (Span 1 2) (ReasonCustom cust))
     ]
 
 testOptThrow :: [TestTree]
@@ -364,7 +366,7 @@ testLookSuccess = fmap testParserCase cases
  where
   parser = lookP headP
   cases =
-    [ ParserCase "non-match empty" parser "" (errLook (Range 0 0) (Range 0 0) (ReasonDemand 1 0))
+    [ ParserCase "non-match empty" parser "" (errLook (Span 0 0) (Span 0 0) (ReasonDemand 1 0))
     , ParserCase "non-empty" parser "hi" (suc 'h' 2)
     ]
 
@@ -374,8 +376,8 @@ testLookFailure = fmap testParserCase cases
   cust = Error "boo"
   parser = lookP (headP *> throwP cust) :: TestParser Char
   cases =
-    [ ParserCase "non-match empty" parser "" (errLook (Range 0 0) (Range 0 0) (ReasonDemand 1 0))
-    , ParserCase "non-empty" parser "hi" (errLook (Range 0 2) (Range 1 2) (ReasonCustom cust))
+    [ ParserCase "non-match empty" parser "" (errLook (Span 0 0) (Span 0 0) (ReasonDemand 1 0))
+    , ParserCase "non-empty" parser "hi" (errLook (Span 0 2) (Span 1 2) (ReasonCustom cust))
     ]
 
 testTakeWhile :: [TestTree]
@@ -395,8 +397,8 @@ testTakeWhile1 = fmap testParserCase cases
  where
   parser = takeWhile1P (== 'h') :: TestParser Text
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonTakeNone)
-    , ParserCase "non-match" parser "i" (err (Range 0 1) ReasonTakeNone)
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonTakeNone)
+    , ParserCase "non-match" parser "i" (err (Span 0 1) ReasonTakeNone)
     , ParserCase "match" parser "hi" (suc "h" 1)
     , ParserCase "match 2" parser "hhi" (suc "hh" 1)
     , ParserCase "match end" parser "hh" (suc "hh" 0)
@@ -419,8 +421,8 @@ testDropWhile1 = fmap testParserCase cases
  where
   parser = dropWhile1P (== 'h') :: TestParser Int
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonTakeNone)
-    , ParserCase "non-match" parser "i" (err (Range 0 1) ReasonTakeNone)
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonTakeNone)
+    , ParserCase "non-match" parser "i" (err (Span 0 1) ReasonTakeNone)
     , ParserCase "match" parser "hi" (suc 1 1)
     , ParserCase "match 2" parser "hhi" (suc 2 1)
     , ParserCase "match end" parser "hh" (suc 2 0)
@@ -434,14 +436,14 @@ testInfixR = fmap testParserCase cases
   parserR = infixRP "+" (textP "x") (textP "x+x") :: TestParser (Text, Text)
   parserL = infixRP "+" (textP "x+x") (textP "x") :: TestParser (Text, Text)
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
-    , ParserCase "fail delim" parser "xy" (err (Range 0 2) ReasonEmpty)
-    , ParserCase "fail first" parser "+y" (errInfix (Range 0 2) [(0, InfixPhaseLeft, Range 0 0, ReasonTakeNone)])
-    , ParserCase "fail second" parser "x+" (errInfix (Range 0 2) [(1, InfixPhaseRight, Range 2 2, ReasonTakeNone)])
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonEmpty)
+    , ParserCase "fail delim" parser "xy" (err (Span 0 2) ReasonEmpty)
+    , ParserCase "fail first" parser "+y" (errInfix (Span 0 2) [(0, InfixPhaseLeft, Span 0 0, ReasonTakeNone)])
+    , ParserCase "fail second" parser "x+" (errInfix (Span 0 2) [(1, InfixPhaseRight, Span 2 2, ReasonTakeNone)])
     , ParserCase "match" parser "x+y" (suc ("x", "y") 0)
     , ParserCase "match multi" parser "x++y" (suc ("x", "+y") 0)
     , ParserCase "match rassoc" parserR "x+x+x" (suc ("x", "x+x") 0)
-    , ParserCase "fail lassoc" parserL "x+x+x" (errInfix (Range 0 5) [(1, InfixPhaseLeft, Range 1 1, ReasonExpect "x+x" "x")])
+    , ParserCase "fail lassoc" parserL "x+x+x" (errInfix (Span 0 5) [(1, InfixPhaseLeft, Span 1 1, ReasonExpect "x+x" "x")])
     ]
 
 testSomeInfixR :: [TestTree]
@@ -452,10 +454,10 @@ testSomeInfixR = fmap testParserCase cases
   parserR = someInfixRP "+" (textP "x") (textP "x+x") :: TestParser (Text, Text)
   parserL = someInfixRP "+" (textP "x+x") (textP "x") :: TestParser (Text, Text)
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
-    , ParserCase "fail delim" parser "xy" (err (Range 0 2) ReasonEmpty)
-    , ParserCase "fail first" parser "+y" (errInfix (Range 0 2) [(0, InfixPhaseLeft, Range 0 0, ReasonTakeNone)])
-    , ParserCase "fail second" parser "x+" (errInfix (Range 0 2) [(1, InfixPhaseRight, Range 2 2, ReasonTakeNone)])
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonEmpty)
+    , ParserCase "fail delim" parser "xy" (err (Span 0 2) ReasonEmpty)
+    , ParserCase "fail first" parser "+y" (errInfix (Span 0 2) [(0, InfixPhaseLeft, Span 0 0, ReasonTakeNone)])
+    , ParserCase "fail second" parser "x+" (errInfix (Span 0 2) [(1, InfixPhaseRight, Span 2 2, ReasonTakeNone)])
     , ParserCase "match" parser "x+y" (suc ("x", "y") 0)
     , ParserCase "match multi" parser "x++y" (suc ("x", "+y") 0)
     , ParserCase "match rassoc" parserR "x+x+x" (suc ("x", "x+x") 0)
@@ -469,12 +471,12 @@ testBreak = fmap testParserCase cases
   parserR = breakP "+" (textP "x")
   parserL = breakP "+" (textP "x+x")
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
-    , ParserCase "fail delim" parser "x" (err (Range 0 1) ReasonEmpty)
-    , ParserCase "fail first" parser "y+" (errInfix (Range 0 2) [(1, InfixPhaseLeft, Range 0 1, ReasonTakeNone)])
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonEmpty)
+    , ParserCase "fail delim" parser "x" (err (Span 0 1) ReasonEmpty)
+    , ParserCase "fail first" parser "y+" (errInfix (Span 0 2) [(1, InfixPhaseLeft, Span 0 1, ReasonTakeNone)])
     , ParserCase "match" parser "x+x+y" (suc "x" 3)
     , ParserCase "match rassoc" parserR "x+x+x" (suc "x" 3)
-    , ParserCase "fail lassoc" parserL "x+x+x" (errInfix (Range 0 5) [(1, InfixPhaseLeft, Range 1 1, ReasonExpect "x+x" "x")])
+    , ParserCase "fail lassoc" parserL "x+x+x" (errInfix (Span 0 5) [(1, InfixPhaseLeft, Span 1 1, ReasonExpect "x+x" "x")])
     ]
 
 testSomeBreak :: [TestTree]
@@ -484,9 +486,9 @@ testSomeBreak = fmap testParserCase cases
   parserR = someBreakP "+" (textP "x")
   parserL = someBreakP "+" (textP "x+x")
   cases =
-    [ ParserCase "empty" parser "" (err (Range 0 0) ReasonEmpty)
-    , ParserCase "fail delim" parser "x" (err (Range 0 1) ReasonEmpty)
-    , ParserCase "fail first" parser "y+" (errInfix (Range 0 2) [(1, InfixPhaseLeft, Range 0 1, ReasonTakeNone)])
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonEmpty)
+    , ParserCase "fail delim" parser "x" (err (Span 0 1) ReasonEmpty)
+    , ParserCase "fail first" parser "y+" (errInfix (Span 0 2) [(1, InfixPhaseLeft, Span 0 1, ReasonTakeNone)])
     , ParserCase "match" parser "x+x+y" (suc "x" 3)
     , ParserCase "match rassoc" parserR "x+x+x" (suc "x" 3)
     , ParserCase "match lassoc" parserL "x+x+x" (suc "x+x" 1)
@@ -513,12 +515,43 @@ testSplit1 = fmap testParserCase cases
   cases =
     [ ParserCase "empty" parser "" (suc ([""], True) 0)
     , ParserCase "single" parser "x" (suc (["x"], True) 0)
-    , ParserCase "fail" parser "xy" (err (Range 0 2) (ReasonSplitComp SplitCompGE 1 "+" 0))
+    , ParserCase "fail" parser "xy" (err (Span 0 2) (ReasonSplitComp SplitCompGE 1 "+" 0))
     , ParserCase "double" parser "x+x" (suc (["x", "x"], True) 0)
     , ParserCase "triple" parser "x+x+x" (suc (["x", "x", "x"], True) 0)
-    , ParserCase "fail first" parser "y+x" (err (Range 0 3) (ReasonSplitComp SplitCompGE 1 "+" 0))
+    , ParserCase "fail first" parser "y+x" (err (Span 0 3) (ReasonSplitComp SplitCompGE 1 "+" 0))
     , ParserCase "fail second" parser "x+y" (suc (["x"], False) 2)
     ]
+
+testSpan :: TestTree
+testSpan = testCase "span" $ do
+  let p :: Parser Void (Span Int, Span Int) = do
+        charP_ 'x'
+        r1 <- spanP
+        charP_ 'y'
+        r2 <- spanP
+        charP_ 'z'
+        pure (r1, r2)
+  let doc = "xyz"
+  case parse p doc of
+    Left e -> throwIO e
+    Right (r1, r2) -> do
+      r1 @?= Span 1 3
+      r2 @?= Span 2 3
+  let v1 = calculateLineCol doc
+  lookupLineCol (-1) v1 @?= (0, 0)
+  lookupLineCol 0 v1 @?= (0, 0)
+  lookupLineCol 1 v1 @?= (0, 1)
+  lookupLineCol 2 v1 @?= (0, 2)
+  lookupLineCol 3 v1 @?= (0, 2)
+  let v2 = calculateLineCol "a\nbc\nd"
+  lookupLineCol (-1) v2 @?= (0, 0)
+  lookupLineCol 0 v2 @?= (0, 0)
+  lookupLineCol 1 v2 @?= (0, 1)
+  lookupLineCol 2 v2 @?= (1, 0)
+  lookupLineCol 3 v2 @?= (1, 1)
+  lookupLineCol 4 v2 @?= (1, 2)
+  lookupLineCol 5 v2 @?= (2, 0)
+  lookupLineCol 6 v2 @?= (2, 0)
 
 testJson :: TestTree
 testJson = testGroup "json" (fmap test cases)
@@ -610,6 +643,7 @@ main =
     testGroup
       "Looksee"
       [ testBasic
+      , testSpan
       , testJson
       , testSexp
       , testArith

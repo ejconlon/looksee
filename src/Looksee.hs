@@ -4,14 +4,17 @@
 
 -- | A simple text parser with decent errors
 module Looksee
-  ( Label (..)
-  , Range (..)
-  , range
+  ( Span (..)
+  , LineColLookup ()
+  , calculateLineCol
+  , lookupLineCol
+  , Label (..)
+  , textSpan
   , SplitComp (..)
   , Reason (..)
   , ErrF (..)
   , Err (..)
-  , errRange
+  , errSpan
   , errReason
   , AltPhase (..)
   , InfixPhase (..)
@@ -20,6 +23,7 @@ module Looksee
   , parseT
   , parse
   , parseI
+  , spanP
   , throwP
   , altP
   , emptyP
@@ -130,36 +134,47 @@ import Errata.Styles qualified as E
 import Errata.Types qualified as E
 import System.IO (stderr)
 
--- private
-type OffsetVec = Vector (Int, Int)
+-- | A generic span, used for tracking ranges of offsets or (line, col)
+data Span a = Span {spanStart :: !a, spanEnd :: !a}
+  deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
--- private
-mkOffsetVec :: Text -> OffsetVec
-mkOffsetVec t = V.unfoldrN (T.length t) go ((0, 0), T.unpack t)
+-- | Auxiliary data structure to translate offsets to (line, col)
+type LineColLookup = Vector (Int, Int)
+
+-- | Construct an offset lookup from a document
+calculateLineCol :: Text -> LineColLookup
+calculateLineCol t = V.unfoldrN (T.length t) go ((0, 0), T.unpack t)
  where
   go (p@(!line, !col), xs) =
     case xs of
       [] -> Nothing
       x : xs' -> Just (p, if x == '\n' then ((line + 1, 0), xs') else ((line, col + 1), xs'))
 
+-- | Returns 0-based (line, col) for the given offset.
+-- Clamps to the valid range of offsets, returning (0, 0) for
+-- empty text. Note that the valid range is from before the first
+-- character to before the last, so a 3 character string has
+-- three valid offsets (0, 1, and 2).
+lookupLineCol :: Int -> LineColLookup -> (Int, Int)
+lookupLineCol i v =
+  if V.null v
+    then (0, 0)
+    else v V.! max 0 (min i (V.length v - 1))
+
 -- | A parser label (for error reporting)
 newtype Label = Label {unLabel :: Text}
   deriving stock (Show)
   deriving newtype (Eq, Ord, IsString)
 
--- | Range in text character offset
-data Range = Range {rangeStart :: !Int, rangeEnd :: !Int}
-  deriving stock (Eq, Ord, Show)
-
--- | Create a range from the given text
-range :: Text -> Range
-range t = Range 0 (T.length t)
+-- | Create a span from the given text
+textSpan :: Text -> Span Int
+textSpan t = Span 0 (T.length t)
 
 -- private
 -- Parser state
 data St = St
   { stHay :: !Text
-  , stRange :: !Range
+  , stSpan :: !(Span Int)
   , stLabels :: !(Seq Label)
   }
   deriving stock (Eq, Ord, Show)
@@ -168,38 +183,38 @@ data St = St
 -- Returns list of possible break points with positions
 -- (startStream, breakPt) breakPt (breakPt + needLen, endStream)
 breakAllRP :: Text -> St -> [(St, Int, St)]
-breakAllRP needle (St hay (Range r0 r1) labs) = fmap go (T.breakOnAll needle hay)
+breakAllRP needle (St hay (Span r0 r1) labs) = fmap go (T.breakOnAll needle hay)
  where
   go (hay1, hay2) =
     let end1 = r0 + T.length hay1
         needLen = T.length needle
-        rng1 = Range r0 end1
-        rng2 = Range (end1 + needLen) r1
+        rng1 = Span r0 end1
+        rng2 = Span (end1 + needLen) r1
         st1 = St hay1 rng1 labs
         st2 = St (T.drop needLen hay2) rng2 labs
     in  (st1, end1, st2)
 
 -- private
 breakRP :: Text -> St -> Maybe (St, Int, St)
-breakRP needle (St hay (Range r0 r1) labs) =
+breakRP needle (St hay (Span r0 r1) labs) =
   let (hay1, hay2) = T.breakOn needle hay
   in  if T.null hay2
         then Nothing
         else
           let end1 = r0 + T.length hay1
               needLen = T.length needle
-              rng1 = Range r0 end1
-              rng2 = Range (end1 + needLen) r1
+              rng1 = Span r0 end1
+              rng2 = Span (end1 + needLen) r1
               st1 = St hay1 rng1 labs
               st2 = St (T.drop needLen hay2) rng2 labs
           in  Just (st1, end1, st2)
 
 -- private
 splitRP :: Text -> St -> [(St, Int)]
-splitRP needle (St hay (Range r0 _) labs) = goHead (T.splitOn needle hay)
+splitRP needle (St hay (Span r0 _) labs) = goHead (T.splitOn needle hay)
  where
   needLen = T.length needle
-  mkSt start end hayN = St hayN (Range start end) labs
+  mkSt start end hayN = St hayN (Span start end) labs
   goHead = \case
     [] -> []
     hay0 : hays ->
@@ -245,7 +260,7 @@ deriveBitraversable ''Reason
 
 -- | Base functor for 'Err' containing the range and reason for the error
 data ErrF e r = ErrF
-  { efRange :: !Range
+  { efSpan :: !(Span Int)
   , efReason :: !(Reason e r)
   }
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
@@ -283,9 +298,9 @@ instance Recursive (Err e) where
 instance Corecursive (Err e) where
   embed = Err
 
--- | Range of a parse error
-errRange :: Err e -> Range
-errRange = efRange . unErr
+-- | Span of a parse error
+errSpan :: Err e -> Span Int
+errSpan = efSpan . unErr
 
 -- | Reason for a parse error
 errReason :: Err e -> Reason e (Err e)
@@ -311,7 +326,7 @@ runT = runStateT . runExceptT . unT
 
 -- private
 mkErrT :: Monad m => Reason e (Err e) -> T e m (Err e)
-mkErrT re = gets (\st -> Err (ErrF (stRange st) re))
+mkErrT re = gets (\st -> Err (ErrF (stSpan st) re))
 
 -- private
 -- errT :: Monad m => Reason e (Err e) -> T e m a
@@ -396,13 +411,13 @@ errP re = ParserT (\j -> mkErrT re >>= j . Left)
 
 -- private
 leftoverP :: Monad m => ParserT e m Int
-leftoverP = getsP (\st -> let Range s e = stRange st in e - s)
+leftoverP = getsP (\st -> let Span s e = stSpan st in e - s)
 
 -- | Run a parser transformer. You must consume all input or this will error!
 -- If you really don't care about the rest of the input, you can always
 -- discard it with 'dropAllP'.
 parseT :: Monad m => ParserT e m a -> Text -> m (Either (Err e) a)
-parseT p h = fmap fst (finishParserT (p <* endP) (St h (range h) Empty))
+parseT p h = fmap fst (finishParserT (p <* endP) (St h (textSpan h) Empty))
 
 -- | Run a parser (see 'parseT')
 parse :: Parser e a -> Text -> Either (Err e) a
@@ -416,6 +431,15 @@ parseI p h = do
     Left e -> printE "<interactive>" h e
     Right _ -> pure ()
   pure ea
+
+-- | Get the span (in character offset) at the current point representing
+-- the entire parseable range. At the start of parsing this will be `Span 0 n` for
+-- an `n`-character document. The start offset will increase as input is consumed,
+-- and the end offset will decrease as lookahead delimits the range. To evaluate
+-- the "real" range of characters consumed by a parser, construct a span with the
+-- starting offsets before and after executing a subparser.
+spanP :: Monad m => ParserT e m (Span Int)
+spanP = getsP stSpan
 
 -- | Throw a custom parse error
 throwP :: Monad m => e -> ParserT e m a
@@ -483,7 +507,7 @@ greedy1P p = liftA2 (:<|) p (greedyP p)
 lookP :: Monad m => ParserT e m a -> ParserT e m a
 lookP (ParserT g) = ParserT $ \j -> do
   st0 <- get
-  g (\ea -> put st0 >> j (first (Err . ErrF (stRange st0) . ReasonLook) ea))
+  g (\ea -> put st0 >> j (first (Err . ErrF (stSpan st0) . ReasonLook) ea))
 
 -- | Labels parse errors
 labelP :: Monad m => Label -> ParserT e m a -> ParserT e m a
@@ -538,11 +562,11 @@ subSplitP st0 pa j = go Empty
       put st
       unParserT (pa <* endP) $ \case
         Left _ -> do
-          let rng = stRange st0
-              start = rangeStart rng
+          let rng = stSpan st0
+              start = spanStart rng
               hay' = T.drop (start' - start) (stHay st0)
-              range' = rng {rangeStart = start'}
-              st' = st0 {stHay = hay', stRange = range'}
+              range' = rng {spanStart = start'}
+              st' = st0 {stHay = hay', stSpan = range'}
           put st'
           j (Right (acc, False))
         Right a -> go (acc :|> a) sts
@@ -630,9 +654,9 @@ takeP i = stateP $ \st ->
   let h = stHay st
       (o, h') = T.splitAt i h
       l = T.length o
-      r = stRange st
-      r' = r {rangeStart = rangeStart r + l}
-      st' = st {stHay = h', stRange = r'}
+      r = stSpan st
+      r' = r {spanStart = spanStart r + l}
+      st' = st {stHay = h', stSpan = r'}
   in  (o, st')
 
 -- | Take exactly the given number of characters from the start of the range, or error
@@ -642,9 +666,9 @@ takeExactP i = do
     let h = stHay st
         (o, h') = T.splitAt i h
         l = T.length o
-        r = stRange st
-        r' = r {rangeStart = rangeStart r + T.length o}
-        st' = st {stHay = h', stRange = r'}
+        r = stSpan st
+        r' = r {spanStart = spanStart r + T.length o}
+        st' = st {stHay = h', stSpan = r'}
     in  if l == i then (Right o, st') else (Left l, st)
   case et of
     Left l -> errP (ReasonDemand i l)
@@ -665,9 +689,9 @@ takeWhileP f = stateP $ \st ->
       o = T.takeWhile f h
       l = T.length o
       h' = T.drop l h
-      r = stRange st
-      r' = r {rangeStart = rangeStart r + l}
-      st' = st {stHay = h', stRange = r'}
+      r = stSpan st
+      r' = r {spanStart = spanStart r + l}
+      st' = st {stHay = h', stSpan = r'}
   in  (o, st')
 
 -- | Like 'takeWhileP' but ensures at least 1 character has been taken
@@ -678,9 +702,9 @@ takeWhile1P f = do
         o = T.takeWhile f h
         l = T.length o
         h' = T.drop l h
-        r = stRange st
-        r' = r {rangeStart = rangeStart r + l}
-        st' = st {stHay = h', stRange = r'}
+        r = stSpan st
+        r' = r {spanStart = spanStart r + l}
+        st' = st {stHay = h', stSpan = r'}
     in  if l == 0 then (Nothing, st) else (Just o, st')
   case mt of
     Nothing -> errP ReasonTakeNone
@@ -698,9 +722,9 @@ dropWhile1P = fmap T.length . takeWhile1P
 takeAllP :: Monad m => ParserT e m Text
 takeAllP = stateP $ \st ->
   let h = stHay st
-      r = stRange st
-      r' = r {rangeStart = rangeEnd r}
-      st' = st {stHay = T.empty, stRange = r'}
+      r = stSpan st
+      r' = r {spanStart = spanEnd r}
+      st' = st {stHay = T.empty, stSpan = r'}
   in  (h, st')
 
 -- | Like 'takeAllP' but ensures at least 1 character has been taken
@@ -708,9 +732,9 @@ takeAll1P :: Monad m => ParserT e m Text
 takeAll1P = do
   mt <- stateP $ \st ->
     let h = stHay st
-        r = stRange st
-        r' = r {rangeStart = rangeEnd r}
-        st' = st {stHay = T.empty, stRange = r'}
+        r = stSpan st
+        r' = r {spanStart = spanEnd r}
+        st' = st {stHay = T.empty, stSpan = r'}
     in  if T.null h then (Nothing, st) else (Just h, st')
   case mt of
     Nothing -> errP (ReasonDemand 1 0)
@@ -812,9 +836,9 @@ stripEndP p = p <* spaceP
 -- | Parses and returns the length of the consumed input along with the result
 measureP :: Monad m => ParserT e m a -> ParserT e m (a, Int)
 measureP p = do
-  start <- getsP (rangeStart . stRange)
+  start <- getsP (spanStart . stSpan)
   a <- p
-  end <- getsP (rangeStart . stRange)
+  end <- getsP (spanStart . stSpan)
   pure (a, end - start)
 
 -- | Takes exactly 1 character from the start of the range, returning Nothing
@@ -826,9 +850,9 @@ unconsP = stateP $ \st ->
   in  case mxy of
         Nothing -> (Nothing, st)
         Just (x, y) ->
-          let r = stRange st
-              r' = r {rangeStart = rangeStart r + 1}
-              st' = st {stHay = y, stRange = r'}
+          let r = stSpan st
+              r' = r {spanStart = spanStart r + 1}
+              st' = st {stHay = y, stSpan = r'}
           in  (Just x, st')
 
 -- | Takes exactly 1 character from the start of the range, throwing error
@@ -960,7 +984,7 @@ indent :: Int -> [Text] -> [Text]
 indent i = let s = T.replicate (2 * i) " " in fmap (s <>)
 
 instance HasErrMessage e => HasErrMessage (Err e) where
-  getErrMessage (Err (ErrF (Range start end) re)) =
+  getErrMessage (Err (ErrF (Span start end) re)) =
     let pos = "Error in range: (" <> T.pack (show start) <> ", " <> T.pack (show end) <> ")"
         body = case re of
           ReasonCustom e ->
@@ -1005,7 +1029,7 @@ instance HasErrMessage e => HasErrMessage (Err e) where
 -- | Create 'Errata' formatting a parse error
 errataE :: HasErrMessage e => FilePath -> (Int -> (E.Line, E.Column)) -> Err e -> [E.Errata]
 errataE fp mkP e =
-  let (line, col) = mkP (rangeStart (errRange e))
+  let (line, col) = mkP (spanStart (errSpan e))
       msg = getErrMessage e
       block = E.blockSimple E.basicStyle E.basicPointer fp Nothing (line, col, col + 1, Nothing) (Just (T.unlines msg))
   in  [E.Errata Nothing [block] Nothing]
@@ -1013,8 +1037,8 @@ errataE fp mkP e =
 -- | Render a formatted error to text
 renderE :: HasErrMessage e => FilePath -> Text -> Err e -> Text
 renderE fp h e =
-  let ov = mkOffsetVec h
-      mkP = if V.null ov then const (1, 1) else \i -> let (!l, !c) = ov V.! min i (V.length ov - 1) in (l + 1, c + 1)
+  let v = calculateLineCol h
+      mkP i = let (l, c) = lookupLineCol i v in (l + 1, c + 1)
   in  TL.toStrict (E.prettyErrors h (errataE fp mkP e))
 
 -- | Print a formatted error to stderr
