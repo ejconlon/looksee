@@ -1,5 +1,5 @@
 stack_build := "stack build --fast"
-src_dirs := "src test"
+src_dirs := "looksee"
 
 # No default tasks
 default:

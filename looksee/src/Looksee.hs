@@ -43,6 +43,10 @@ module Looksee
   , splitCompP
   , split1P
   , split2P
+  , leadP
+  , lead1P
+  , trailP
+  , trail1P
   , infixRP
   , someInfixRP
   , takeP
@@ -596,6 +600,30 @@ split1P = splitCompP SplitCompGE 1
 -- (This ensures there is at least one delimiter included.)
 split2P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
 split2P = splitCompP SplitCompGE 2
+
+-- | Like 'splitP' but ensures a leading delimiter
+leadP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+leadP tx pa = do
+  mu <- optP (textP tx)
+  case mu of
+    Nothing -> pure Empty
+    Just _ -> split1P tx pa
+
+-- | Like 'split1P' but ensures a leading delimiter
+lead1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+lead1P tx pa = textP tx >> split1P tx pa
+
+-- | Like 'splitP' but ensures a trailing delimiter
+trailP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+trailP tx pa = do
+  as <- splitP tx pa
+  case as of
+    Empty -> pure Empty
+    _ -> as <$ textP tx
+
+-- | Like 'split1P' but ensures a trailing delimiter
+trail1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+trail1P tx pa = split1P tx pa <* textP tx
 
 -- private
 subInfixP

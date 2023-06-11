@@ -4,5 +4,5 @@ ghc-options:
   "$everything": -haddock
 
 packages:
-- .
+- looksee
 
