@@ -5,7 +5,6 @@ module Main (main) where
 
 import Control.Applicative (Alternative (..), liftA2)
 import Control.Exception (throwIO)
-import Data.Bifunctor (first)
 import Data.Foldable (toList)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
@@ -497,29 +496,33 @@ testSomeBreak = fmap testParserCase cases
 testSplit :: [TestTree]
 testSplit = fmap testParserCase cases
  where
-  parser = fmap (first toList) (splitP "+" (takeWhileP (== 'x')))
+  parser = fmap toList (splitP "+" (takeWhile1P (== 'x')))
   cases =
-    [ ParserCase "empty" parser "" (suc ([""], True) 0)
-    , ParserCase "single" parser "x" (suc (["x"], True) 0)
-    , ParserCase "fail" parser "xy" (suc ([], False) 2)
-    , ParserCase "double" parser "x+x" (suc (["x", "x"], True) 0)
-    , ParserCase "triple" parser "x+x+x" (suc (["x", "x", "x"], True) 0)
-    , ParserCase "fail first" parser "y+x" (suc ([], False) 3)
-    , ParserCase "fail second" parser "x+y" (suc (["x"], False) 2)
+    [ ParserCase "empty" parser "" (suc [] 0)
+    , ParserCase "single" parser "x" (suc ["x"] 0)
+    , ParserCase "no delim" parser "xy" (suc ["x"] 1)
+    , ParserCase "double" parser "x+x" (suc ["x", "x"] 0)
+    , ParserCase "triple" parser "x+x+x" (suc ["x", "x", "x"] 0)
+    , ParserCase "two + fail" parser "x+x+y" (suc ["x", "x"] 2)
+    , ParserCase "two fail" parser "x+xy" (suc ["x", "x"] 1)
+    , ParserCase "fail first" parser "y+x" (suc [] 3)
+    , ParserCase "fail second" parser "x+y" (suc ["x"] 2)
     ]
 
 testSplit1 :: [TestTree]
 testSplit1 = fmap testParserCase cases
  where
-  parser = fmap (first toList) (split1P "+" (takeWhileP (== 'x')))
+  parser = fmap toList (split1P "+" (takeWhile1P (== 'x')))
   cases =
-    [ ParserCase "empty" parser "" (suc ([""], True) 0)
-    , ParserCase "single" parser "x" (suc (["x"], True) 0)
-    , ParserCase "fail" parser "xy" (err (Span 0 2) (ReasonSplitComp SplitCompGE 1 "+" 0))
-    , ParserCase "double" parser "x+x" (suc (["x", "x"], True) 0)
-    , ParserCase "triple" parser "x+x+x" (suc (["x", "x", "x"], True) 0)
+    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonSplitComp SplitCompGE 1 "+" 0))
+    , ParserCase "single" parser "x" (suc ["x"] 0)
+    , ParserCase "no delim" parser "xy" (suc ["x"] 1)
+    , ParserCase "double" parser "x+x" (suc ["x", "x"] 0)
+    , ParserCase "triple" parser "x+x+x" (suc ["x", "x", "x"] 0)
+    , ParserCase "two + fail" parser "x+x+y" (suc ["x", "x"] 2)
+    , ParserCase "two fail" parser "x+xy" (suc ["x", "x"] 1)
     , ParserCase "fail first" parser "y+x" (err (Span 0 3) (ReasonSplitComp SplitCompGE 1 "+" 0))
-    , ParserCase "fail second" parser "x+y" (suc (["x"], False) 2)
+    , ParserCase "fail second" parser "x+y" (suc ["x"] 2)
     ]
 
 testSpan :: TestTree

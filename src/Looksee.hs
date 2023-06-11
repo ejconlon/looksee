@@ -42,6 +42,7 @@ module Looksee
   , splitP
   , splitCompP
   , split1P
+  , split2P
   , infixRP
   , someInfixRP
   , takeP
@@ -551,16 +552,16 @@ subSplitP
   :: Monad m
   => St
   -> ParserT e m a
-  -> (Either (Err e) (Seq a, Bool) -> T e m r)
+  -> (Either (Err e) (Seq a) -> T e m r)
   -> [(St, Int)]
   -> T e m r
 subSplitP st0 pa j = go Empty
  where
   go !acc = \case
-    [] -> j (Right (acc, True))
+    [] -> j (Right acc)
     (st, start') : sts -> do
       put st
-      unParserT (pa <* endP) $ \case
+      unParserT pa $ \case
         Left _ -> do
           let rng = stSpan st0
               start = spanStart rng
@@ -568,28 +569,33 @@ subSplitP st0 pa j = go Empty
               range' = rng {spanStart = start'}
               st' = st0 {stHay = hay', stSpan = range'}
           put st'
-          j (Right (acc, False))
+          j (Right acc)
         Right a -> go (acc :|> a) sts
 
 -- | Split on the delimiter, parsing segments with a narrowed range, until parsing fails.
 -- Returns the sequence of successes with state at the delimiter preceding the failure (or end of input),
--- and True if there are no more delimiters in the tail.
-splitP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a, Bool)
+-- Note that this will always succeed, sometimes consuming no input and yielding empty results.
+splitP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
 splitP tx pa = ParserT (\j -> get >>= \st0 -> subSplitP st0 pa j (splitRP tx st0))
 
-splitCompP :: Monad m => SplitComp -> Int -> Text -> ParserT e m a -> ParserT e m (Seq a, Bool)
+splitCompP :: Monad m => SplitComp -> Int -> Text -> ParserT e m a -> ParserT e m (Seq a)
 splitCompP comp n tx pa = do
-  p@(as, _) <- splitP tx pa
+  as <- splitP tx pa
   let len = Seq.length as
       ok = case comp of
         SplitCompEQ -> len == n
         SplitCompGE -> len >= n
         SplitCompGT -> len > n
-  if ok then pure p else errP (ReasonSplitComp comp n tx len)
+  if ok then pure as else errP (ReasonSplitComp comp n tx len)
 
--- | Like 'splitP' but ensures the sequence is at least length 1
-split1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a, Bool)
+-- | Like 'splitP' but ensures the sequence is at least length 1.
+split1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
 split1P = splitCompP SplitCompGE 1
+
+-- | Like 'splitP' but ensures the sequence is at least length 2.
+-- (This ensures there is at least one delimiter included.)
+split2P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+split2P = splitCompP SplitCompGE 2
 
 -- private
 subInfixP
