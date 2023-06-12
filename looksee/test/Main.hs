@@ -5,7 +5,8 @@ module Main (main) where
 
 import Control.Applicative (Alternative (..), liftA2)
 import Control.Exception (throwIO)
-import Data.Foldable (toList)
+import Control.Monad (join)
+import Data.Foldable (for_, toList)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.String (IsString)
@@ -556,6 +557,29 @@ testSpan = testCase "span" $ do
   lookupLineCol 5 v2 @?= (2, 0)
   lookupLineCol 6 v2 @?= (2, 0)
 
+splitBindP :: Parser Void (Seq Char)
+splitBindP =
+  fmap join $
+    betweenP (charP '{') (charP '}') $
+      splitP "," $
+        labelP "split" splitBindP <|> labelP "pure" (fmap pure (charP 'x'))
+
+testSplitBind :: TestTree
+testSplitBind = testCase "split bind" $ do
+  let docs =
+        [ "{x,{x,x}}"
+        , "{{x,x},x}"
+        , "{{x},x,x}"
+        , "{x,{x},x}"
+        , "{x,{{x}},x}"
+        ]
+  for_ docs $ \doc -> do
+    res <- parseI splitBindP doc
+    case res of
+      Left e -> throwIO e
+      Right xs -> do
+        xs @?= Seq.fromList "xxx"
+
 testJson :: TestTree
 testJson = testGroup "json" (fmap test cases)
  where
@@ -585,6 +609,7 @@ testJson = testGroup "json" (fmap test cases)
     , ("obj0", "{}", Just (objVal []))
     , ("obj1", "{\"x\": true}", Just (objVal [("x", trueVal)]))
     , ("obj2", "{\"x\": true, \"y\": false}", Just (objVal [("x", trueVal), ("y", falseVal)]))
+    , ("obj3", "{\"x\": {\"y\": false}}", Just (objVal [("x", objVal [("y", falseVal)])]))
     , ("num0", "0", Just (JsonNum 0))
     , ("num1", "123", Just (JsonNum 123))
     , ("num2", "123.45", Just (JsonNum 123.45))
@@ -647,6 +672,7 @@ main =
       "Looksee"
       [ testBasic
       , testSpan
+      , testSplitBind
       , testJson
       , testSexp
       , testArith
