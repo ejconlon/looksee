@@ -65,8 +65,8 @@ testBasic =
       , ("end", testEnd)
       , ("expectHead", testExpectHead)
       , ("expect", testExpect)
-      , ("greedy", testGreedy)
-      , ("greedy1", testGreedy1)
+      , ("repeat", testRepeat)
+      , ("repeat1", testRepeat1)
       , ("or", testOr)
       , ("alt", testAlt)
       , ("opt (empty)", testOptEmpty)
@@ -93,6 +93,10 @@ testBasic =
       , ("someBreak", testSomeBreak)
       , ("split", testSplit)
       , ("split1", testSplit1)
+      , ("split2", testSplit2)
+      , ("sepBy", testSepBy)
+      , ("sepBy1", testSepBy1)
+      , ("sepBy2", testSepBy2)
       ]
 
 testEmpty :: [TestTree]
@@ -185,10 +189,10 @@ testExpect = fmap testParserCase cases
     , ParserCase "short" parser "h" (err (Span 1 1) (ReasonExpect "hi" "h"))
     ]
 
-testGreedy :: [TestTree]
-testGreedy = fmap testParserCase cases
+testRepeat :: [TestTree]
+testRepeat = fmap testParserCase cases
  where
-  parser = fmap (T.pack . toList) (greedyP (charP 'h')) :: TestParser Text
+  parser = fmap (T.pack . toList) (repeatP (charP 'h')) :: TestParser Text
   cases =
     [ ParserCase "empty" parser "" (suc "" 0)
     , ParserCase "non-empty" parser "hi" (suc "h" 1)
@@ -197,10 +201,10 @@ testGreedy = fmap testParserCase cases
     , ParserCase "non-match" parser "bye" (suc "" 3)
     ]
 
-testGreedy1 :: [TestTree]
-testGreedy1 = fmap testParserCase cases
+testRepeat1 :: [TestTree]
+testRepeat1 = fmap testParserCase cases
  where
-  parser = fmap (T.pack . toList) (greedy1P (charP 'h')) :: TestParser Text
+  parser = fmap (T.pack . toList) (repeat1P (charP 'h')) :: TestParser Text
   cases =
     [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonExpect "h" ""))
     , ParserCase "non-empty" parser "hi" (suc "h" 1)
@@ -515,15 +519,79 @@ testSplit1 = fmap testParserCase cases
  where
   parser = fmap toList (split1P "+" (takeWhile1P (== 'x')))
   cases =
-    [ ParserCase "empty" parser "" (err (Span 0 0) (ReasonSplitComp SplitCompGE 1 "+" 0))
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonTakeNone)
     , ParserCase "single" parser "x" (suc ["x"] 0)
     , ParserCase "no delim" parser "xy" (suc ["x"] 1)
     , ParserCase "double" parser "x+x" (suc ["x", "x"] 0)
     , ParserCase "triple" parser "x+x+x" (suc ["x", "x", "x"] 0)
     , ParserCase "two + fail" parser "x+x+y" (suc ["x", "x"] 2)
     , ParserCase "two fail" parser "x+xy" (suc ["x", "x"] 1)
-    , ParserCase "fail first" parser "y+x" (err (Span 0 3) (ReasonSplitComp SplitCompGE 1 "+" 0))
+    , ParserCase "fail first" parser "y+x" (err (Span 0 3) ReasonTakeNone)
     , ParserCase "fail second" parser "x+y" (suc ["x"] 2)
+    ]
+
+testSplit2 :: [TestTree]
+testSplit2 = fmap testParserCase cases
+ where
+  parser = fmap toList (split2P "+" (takeWhile1P (== 'x')))
+  cases =
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonEmpty)
+    , ParserCase "single" parser "x" (err (Span 0 1) ReasonEmpty)
+    , ParserCase "no delim" parser "xy" (err (Span 0 2) ReasonEmpty)
+    , ParserCase "double" parser "x+x" (suc ["x", "x"] 0)
+    , ParserCase "triple" parser "x+x+x" (suc ["x", "x", "x"] 0)
+    , ParserCase "two + fail" parser "x+x+y" (suc ["x", "x"] 2)
+    , ParserCase "two fail" parser "x+xy" (suc ["x", "x"] 1)
+    , ParserCase "fail first" parser "y+x" (errInfix (Span 0 3) [(1, InfixPhaseLeft, Span 0 1, ReasonTakeNone)])
+    , ParserCase "fail second" parser "x+y" (errInfix (Span 0 3) [(1, InfixPhaseCont, Span 2 3, ReasonTakeNone)])
+    ]
+
+testSepBy :: [TestTree]
+testSepBy = fmap testParserCase cases
+ where
+  parser = fmap toList (sepByP (charP_ '+') (takeWhile1P (== 'x')))
+  cases =
+    [ ParserCase "empty" parser "" (suc [] 0)
+    , ParserCase "single" parser "x" (suc ["x"] 0)
+    , ParserCase "no delim" parser "xy" (suc ["x"] 1)
+    , ParserCase "double" parser "x+x" (suc ["x", "x"] 0)
+    , ParserCase "triple" parser "x+x+x" (suc ["x", "x", "x"] 0)
+    , ParserCase "two + fail" parser "x+x+y" (suc ["x", "x"] 2)
+    , ParserCase "two fail" parser "x+xy" (suc ["x", "x"] 1)
+    , ParserCase "fail first" parser "y+x" (suc [] 3)
+    , ParserCase "fail second" parser "x+y" (suc ["x"] 2)
+    ]
+
+testSepBy1 :: [TestTree]
+testSepBy1 = fmap testParserCase cases
+ where
+  parser = fmap toList (sepBy1P (charP_ '+') (takeWhile1P (== 'x')))
+  cases =
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonTakeNone)
+    , ParserCase "single" parser "x" (suc ["x"] 0)
+    , ParserCase "no delim" parser "xy" (suc ["x"] 1)
+    , ParserCase "double" parser "x+x" (suc ["x", "x"] 0)
+    , ParserCase "triple" parser "x+x+x" (suc ["x", "x", "x"] 0)
+    , ParserCase "two + fail" parser "x+x+y" (suc ["x", "x"] 2)
+    , ParserCase "two fail" parser "x+xy" (suc ["x", "x"] 1)
+    , ParserCase "fail first" parser "y+x" (err (Span 0 3) ReasonTakeNone)
+    , ParserCase "fail second" parser "x+y" (suc ["x"] 2)
+    ]
+
+testSepBy2 :: [TestTree]
+testSepBy2 = fmap testParserCase cases
+ where
+  parser = fmap toList (sepBy2P (charP_ '+') (takeWhile1P (== 'x')))
+  cases =
+    [ ParserCase "empty" parser "" (err (Span 0 0) ReasonTakeNone)
+    , ParserCase "single" parser "x" (err (Span 1 1) (ReasonExpect "+" ""))
+    , ParserCase "no delim" parser "xy" (err (Span 2 2) (ReasonExpect "+" "y"))
+    , ParserCase "double" parser "x+x" (suc ["x", "x"] 0)
+    , ParserCase "triple" parser "x+x+x" (suc ["x", "x", "x"] 0)
+    , ParserCase "two + fail" parser "x+x+y" (suc ["x", "x"] 2)
+    , ParserCase "two fail" parser "x+xy" (suc ["x", "x"] 1)
+    , ParserCase "fail first" parser "y+x" (err (Span 0 3) ReasonTakeNone)
+    , ParserCase "fail second" parser "x+y" (err (Span 2 3) ReasonTakeNone)
     ]
 
 testSpan :: TestTree

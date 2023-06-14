@@ -10,7 +10,6 @@ module Looksee
   , lookupLineCol
   , Label (..)
   , textSpan
-  , SplitComp (..)
   , Reason (..)
   , ErrF (..)
   , Err (..)
@@ -29,8 +28,6 @@ module Looksee
   , emptyP
   , endP
   , optP
-  , greedyP
-  , greedy1P
   , lookP
   , labelP
   , textP
@@ -40,7 +37,6 @@ module Looksee
   , breakP
   , someBreakP
   , splitP
-  , splitCompP
   , split1P
   , split2P
   , leadP
@@ -62,7 +58,11 @@ module Looksee
   , takeAll1P
   , dropAll1P
   , betweenP
+  , repeatP
+  , repeat1P
   , sepByP
+  , sepBy1P
+  , sepBy2P
   , spaceP
   , stripP
   , stripStartP
@@ -80,14 +80,10 @@ module Looksee
   , usciP
   , numP
   , unumP
-  , repeatP
-  , repeat1P
   , space1P
   , strip1P
   , stripStart1P
   , stripEnd1P
-  , sepBy1P
-  , sepBy2P
   , transP
   , scopeP
   , iterP
@@ -228,13 +224,9 @@ data AltPhase = AltPhaseBranch | AltPhaseCont
 data InfixPhase = InfixPhaseLeft | InfixPhaseRight | InfixPhaseCont
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
-data SplitComp = SplitCompEQ | SplitCompGE | SplitCompGT
-  deriving stock (Eq, Ord, Show, Enum, Bounded)
-
 -- | Reason for parse failure
 data Reason e r
   = ReasonCustom !e
-  | ReasonSplitComp !SplitComp !Int !Text !Int
   | ReasonExpect !Text !Text
   | ReasonDemand !Int !Int
   | ReasonLeftover !Int
@@ -346,8 +338,8 @@ instance Monad (ParserT e m) where
 instance Monad m => Alternative (ParserT e m) where
   empty = emptyP
   p1 <|> p2 = altP [p1, p2]
-  many = fmap toList . greedyP
-  some = fmap toList . greedy1P
+  many = fmap toList . repeatP
+  some = fmap toList . repeat1P
 
 -- | The parser monad
 type Parser e = ParserT e Identity
@@ -482,20 +474,6 @@ altP falts = ParserT (\j -> get >>= \st0 -> subAltP j st0 Empty (toList falts))
 emptyP :: Monad m => ParserT e m a
 emptyP = ParserT (\j -> mkErrT ReasonEmpty >>= j . Left)
 
--- | Parse repeatedly until the parser fails
-greedyP :: Monad m => ParserT e m a -> ParserT e m (Seq a)
-greedyP p = go Empty
- where
-  go !acc = do
-    ma <- optP p
-    case ma of
-      Nothing -> pure acc
-      Just a -> go (acc :|> a)
-
--- | Same as 'greedyP' but ensure at least one result
-greedy1P :: Monad m => ParserT e m a -> ParserT e m (Seq a)
-greedy1P p = liftA2 (:<|) p (greedyP p)
-
 -- | Lookahead - rewinds state if the parser succeeds, otherwise throws error
 lookP :: Monad m => ParserT e m a -> ParserT e m a
 lookP (ParserT g) = ParserT $ \j -> do
@@ -539,36 +517,39 @@ breakP tx pa = fmap fst (infixRP tx pa (pure ()))
 someBreakP :: Monad m => Text -> ParserT e m a -> ParserT e m a
 someBreakP tx pa = fmap fst (someInfixRP tx pa (pure ()))
 
--- | Split on the delimiter, parsing segments with a narrowed range, until parsing fails.
--- Returns the sequence of successes with state at the delimiter preceding the failure (or end of input),
--- Note that this will always succeed, sometimes consuming no input and yielding empty results.
-splitP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
-splitP tx pa = getP >>= go Empty
+-- private
+splitTailP :: Monad m => Text -> ParserT e m a -> Seq a -> St -> ParserT e m (Seq a)
+splitTailP tx pa = go
  where
   go !acc !st = do
-    mz <- ignoreErrorInfixRP tx pa (pure ())
+    mz <- optInfixRP tx pa (pure ())
     case mz of
       Nothing -> optP pa >>= maybe (acc <$ putP st) (pure . (acc :|>))
       Just (a, st', _) -> go (acc :|> a) st'
 
-splitCompP :: Monad m => SplitComp -> Int -> Text -> ParserT e m a -> ParserT e m (Seq a)
-splitCompP comp n tx pa = do
-  as <- splitP tx pa
-  let len = Seq.length as
-      ok = case comp of
-        SplitCompEQ -> len == n
-        SplitCompGE -> len >= n
-        SplitCompGT -> len > n
-  if ok then pure as else errP (ReasonSplitComp comp n tx len)
+-- | Split on the delimiter, parsing segments with a narrowed range, until parsing fails.
+-- Returns the sequence of successes with state at the delimiter preceding the failure (or end of input),
+-- Note that this will always succeed, sometimes consuming no input and yielding empty results.
+splitP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+splitP tx pa = getP >>= splitTailP tx pa Empty
 
 -- | Like 'splitP' but ensures the sequence is at least length 1.
 split1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
-split1P = splitCompP SplitCompGE 1
+split1P tx pa = do
+  mz <- optInfixRP tx pa (pure ())
+  case mz of
+    Nothing -> fmap Seq.singleton pa
+    Just (a, st', _) -> splitTailP tx pa (Seq.singleton a) st'
 
 -- | Like 'splitP' but ensures the sequence is at least length 2.
 -- (This ensures there is at least one delimiter included.)
 split2P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
-split2P = splitCompP SplitCompGE 2
+split2P tx pa = do
+  a0 <- someBreakP tx pa
+  mz <- optInfixRP tx pa (pure ())
+  case mz of
+    Nothing -> fmap (Empty :|> a0 :|>) pa
+    Just (a1, st', _) -> splitTailP tx pa (Empty :|> a0 :|> a1) st'
 
 -- | Like 'splitP' but ensures a leading delimiter
 leadP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
@@ -627,22 +608,23 @@ subInfixP st0 pa pb j = go Empty
                 Right c -> pure c
 
 -- private
-ignoreErrorInfixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (a, St, b))
-ignoreErrorInfixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (ignoreErrorInfix j) (breakAllRP tx st0))
+optInfixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (a, St, b))
+optInfixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (optInfixFn j) (breakAllRP tx st0))
 
-ignoreErrorInfix
+-- private
+optInfixFn
   :: (Either (Err e) (Maybe (a, St, b)) -> T e m r)
   -> (Either (Err e) (Maybe (a, St, b)) -> T e m r)
-ignoreErrorInfix j e = case e of
+optInfixFn j e = case e of
   Right _ -> j e
   Left _ -> j (Right Nothing)
 
 -- private
-requireInfix
+requireInfixFn
   :: Monad m
   => (Either (Err e) (a, b) -> T e m r)
   -> (Either (Err e) (Maybe (a, St, b)) -> T e m r)
-requireInfix j = \case
+requireInfixFn j = \case
   Right mxab ->
     case mxab of
       Nothing -> mkErrT ReasonEmpty >>= j . Left
@@ -652,12 +634,12 @@ requireInfix j = \case
 -- | Right-associative infix parsing. Searches for the operator from START to END of range,
 -- trying only the first break point.
 infixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
-infixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (requireInfix j) (maybeToList (breakRP tx st0)))
+infixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (requireInfixFn j) (maybeToList (breakRP tx st0)))
 
 -- | Right-associative infix parsing. Searches for the operator from START to END of range,
 -- trying subsequent break points until success.
 someInfixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
-someInfixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (requireInfix j) (breakAllRP tx st0))
+someInfixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (requireInfixFn j) (breakAllRP tx st0))
 
 -- | Take the given number of characters from the start of the range, or fewer if empty
 takeP :: Monad m => Int -> ParserT e m Text
@@ -811,22 +793,48 @@ singleStrP = strP '\''
 betweenP :: ParserT e m x -> ParserT e m y -> ParserT e m a -> ParserT e m a
 betweenP px py pa = px *> pa <* py
 
--- | Parse a sequence of items delimited by the first parser
-sepByP :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-sepByP c p = go
+repeatTailP :: Monad m => ParserT e m a -> Seq a -> ParserT e m (Seq a)
+repeatTailP p = go
  where
-  go = do
+  go !acc = do
     ma <- optP p
     case ma of
-      Nothing -> pure Empty
-      Just a -> goNext (Empty :|> a)
-  goNext !acc = do
-    mc <- optP c
-    case mc of
       Nothing -> pure acc
-      Just _ -> do
-        a <- p
-        goNext (acc :|> a)
+      Just a -> go (acc :|> a)
+
+-- | Repeat a parser until it fails, collecting the results.
+repeatP :: Monad m => ParserT e m a -> ParserT e m (Seq a)
+repeatP p = repeatTailP p Empty
+
+-- | Like 'repeatP' but ensures at least one result.
+repeat1P :: Monad m => ParserT e m a -> ParserT e m (Seq a)
+repeat1P p = p >>= repeatTailP p . Seq.singleton
+
+-- private
+sepByTailP :: Monad m => ParserT e m () -> ParserT e m a -> Seq a -> ParserT e m (Seq a)
+sepByTailP pu pa = go
+ where
+  go !acc = do
+    ma <- optP (pu >> pa)
+    case ma of
+      Nothing -> pure acc
+      Just a -> go (acc :|> a)
+
+-- | Parse a sequence of items delimited by the first parser
+sepByP :: Monad m => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
+sepByP pu pa = optP pa >>= maybe (pure Empty) (sepByTailP pu pa . Seq.singleton)
+
+-- | Like 'sepByP' but ensures at least one result.
+sepBy1P :: Monad m => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
+sepBy1P pu pa = pa >>= sepByTailP pu pa . Seq.singleton
+
+-- | Like 'sepByP' but ensures at least two results (and at least one delimiter).
+sepBy2P :: Monad m => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
+sepBy2P pu pa = do
+  a0 <- pa
+  pu
+  a1 <- pa
+  sepByTailP pu pa (Empty :|> a0 :|> a1)
 
 -- | Consumes many spaces at the start of the range
 spaceP :: Monad m => ParserT e m ()
@@ -945,20 +953,6 @@ unumP = do
           partS = S.scientific frac (ex - places)
       pure (Right (wholeS + partS))
 
--- | Repeat a parser until it fails, collecting the results.
-repeatP :: Monad m => ParserT e m a -> ParserT e m (Seq a)
-repeatP p = go Empty
- where
-  go !acc = do
-    ma <- optP p
-    case ma of
-      Nothing -> pure acc
-      Just a -> go (acc :|> a)
-
--- | Like 'repeatP' but ensures at least 1
-repeat1P :: Monad m => ParserT e m a -> ParserT e m (Seq a)
-repeat1P p = liftA2 (:<|) p (repeatP p)
-
 -- | Like 'spaceP' but ensures at least 1 space removed
 space1P :: Monad m => ParserT e m ()
 space1P = void (dropWhile1P isSpace)
@@ -974,14 +968,6 @@ stripStart1P p = space1P *> p
 -- | Like 'stripEndP' but ensures at least 1 space removed
 stripEnd1P :: Monad m => ParserT e m a -> ParserT e m a
 stripEnd1P p = p <* space1P
-
--- | Like 'sepByP' but ensures at least 1 element
-sepBy1P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-sepBy1P px pa = liftA2 (:<|) pa (fmap (fromMaybe Empty) (optP (px *> sepByP px pa)))
-
--- | Like 'sepBy1P' but ensures at least 2 elements (i.e. there was a delimiter)
-sepBy2P :: Monad m => ParserT e m x -> ParserT e m a -> ParserT e m (Seq a)
-sepBy2P px pa = liftA2 (:<|) (pa <* px) (sepBy1P px pa)
 
 -- | Implement this to format custom errors. The list will be joined with `unlines`.
 class HasErrMessage e where
@@ -1002,9 +988,6 @@ instance HasErrMessage e => HasErrMessage (Err e) where
             let hd = "Custom error:"
                 tl = indent 1 (getErrMessage e)
             in  hd : tl
-          ReasonSplitComp comp n tx len ->
-            let op = case comp of SplitCompEQ -> "=="; SplitCompGE -> ">="; SplitCompGT -> ">"
-            in  ["Split on \"" <> tx <> "\" with length " <> T.pack (show len) <> " not " <> op <> " " <> T.pack (show n)]
           ReasonExpect expected actual ->
             ["Expected text: '" <> expected <> "' but found: '" <> actual <> "'"]
           ReasonDemand expected actual ->

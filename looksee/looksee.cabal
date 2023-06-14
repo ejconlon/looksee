@@ -5,7 +5,7 @@ cabal-version: 1.12
 -- see: https://github.com/sol/hpack
 
 name:           looksee
-version:        0.4.0
+version:        0.5.0
 synopsis:       parser with looksee
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 homepage:       https://github.com/ejconlon/looksee#readme
