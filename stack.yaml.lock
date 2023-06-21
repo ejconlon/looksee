@@ -3,10 +3,21 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-packages: []
+packages:
+- completed:
+    commit: d793e762274a71f11d2b9b298c2edbe19b13617f
+    git: git@github.com:ejconlon/errata.git
+    name: errata
+    pantry-tree:
+      sha256: 0cff5a21464738482dfa90b915e059ff3b5015e4cc93b40f548494461877e117
+      size: 4057
+    version: 0.4.0.1
+  original:
+    commit: d793e762274a71f11d2b9b298c2edbe19b13617f
+    git: git@github.com:ejconlon/errata.git
 snapshots:
 - completed:
-    sha256: e019cd29e3f7f9dbad500225829a3f7a50f73c674614f2f452e21bb8bf5d99ea
-    size: 650253
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/20/24.yaml
-  original: lts-20.24
+    sha256: 1867d84255dff8c87373f5dd03e5a5cb1c10a99587e26c8793e750c54e83ffdc
+    size: 639139
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/21/0.yaml
+  original: lts-21.0

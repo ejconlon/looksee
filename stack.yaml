@@ -1,8 +1,14 @@
-resolver: lts-20.24
+resolver: lts-21.0
 
 ghc-options:
   "$everything": -haddock
 
 packages:
 - looksee
+
+extra-deps:
+# TODO use hackage dep when published
+# - errata-0.4.0.1
+- git: git@github.com:ejconlon/errata.git
+  commit: d793e762274a71f11d2b9b298c2edbe19b13617f
 
