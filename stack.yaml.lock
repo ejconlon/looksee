@@ -5,19 +5,15 @@
 
 packages:
 - completed:
-    commit: d793e762274a71f11d2b9b298c2edbe19b13617f
-    git: git@github.com:ejconlon/errata.git
-    name: errata
+    hackage: errata-0.4.0.1@sha256:c535562dc79845190134bcd833a9fb3d8148361360085b1de917dded6044348d,2369
     pantry-tree:
-      sha256: 0cff5a21464738482dfa90b915e059ff3b5015e4cc93b40f548494461877e117
-      size: 4057
-    version: 0.4.0.1
+      sha256: f6d4132b0ae34a2c8b3a5a73e51cc77744f5e6925fe32d071543e1dd80d14896
+      size: 809
   original:
-    commit: d793e762274a71f11d2b9b298c2edbe19b13617f
-    git: git@github.com:ejconlon/errata.git
+    hackage: errata-0.4.0.1
 snapshots:
 - completed:
-    sha256: 1867d84255dff8c87373f5dd03e5a5cb1c10a99587e26c8793e750c54e83ffdc
-    size: 639139
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/21/0.yaml
-  original: lts-21.0
+    sha256: 2e7d4a730d8eb5373b2d383fac84efcf7c81e3b7a5fce71b4c2e19a1768f25a6
+    size: 640239
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/21/6.yaml
+  original: lts-21.6

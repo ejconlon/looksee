@@ -6,7 +6,7 @@ cabal-version: 1.12
 
 name:           looksee
 version:        0.5.1
-synopsis:       parser with looksee
+synopsis:       A simple text parser with decent errors
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 homepage:       https://github.com/ejconlon/looksee#readme
 bug-reports:    https://github.com/ejconlon/looksee/issues
@@ -16,7 +16,7 @@ copyright:      (c) 2023 Eric Conlon
 license:        BSD3
 build-type:     Simple
 tested-with:
-    GHC == 9.2.7
+    GHC == 9.4.5
 extra-source-files:
     README.md
 

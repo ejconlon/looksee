@@ -6,9 +6,9 @@ license: BSD3
 author: Eric Conlon
 maintainer: ejconlon@gmail.com
 copyright: (c) 2023 Eric Conlon
-synopsis: parser with looksee
+synopsis: A simple text parser with decent errors
 description: Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
-tested-with: GHC == 9.2.7
+tested-with: GHC == 9.4.5
 
 language: GHC2021
 

@@ -301,16 +301,16 @@ instance MonadTrans (T e) where
 instance MFunctor (T e) where
   hoist mn (T x) = T (hoist (hoist mn) x)
 
-deriving instance MonadReader r m => MonadReader r (T e m)
+deriving instance (MonadReader r m) => MonadReader r (T e m)
 
-deriving instance MonadWriter w m => MonadWriter w (T e m)
+deriving instance (MonadWriter w m) => MonadWriter w (T e m)
 
 -- private
 runT :: T e m a -> St -> m (Either (Err e) a, St)
 runT = runStateT . runExceptT . unT
 
 -- private
-mkErrT :: Monad m => Reason e (Err e) -> T e m (Err e)
+mkErrT :: (Monad m) => Reason e (Err e) -> T e m (Err e)
 mkErrT re = gets (\st -> Err (ErrF (stSpan st) re))
 
 -- private
@@ -318,7 +318,7 @@ mkErrT re = gets (\st -> Err (ErrF (stSpan st) re))
 -- errT = mkErrT >=> throwError
 
 -- private
-tryT :: Monad m => T e m r -> T e m (Either (Err e) r)
+tryT :: (Monad m) => T e m r -> T e m (Either (Err e) r)
 tryT t = get >>= \st -> lift (runT t st) >>= \(er, st') -> er <$ put st'
 
 -- | The parser monad transformer
@@ -335,7 +335,7 @@ instance Monad (ParserT e m) where
   return = pure
   ParserT g >>= f = ParserT (\j -> g (\case Left e -> j (Left e); Right a -> let ParserT h = f a in h j))
 
-instance Monad m => Alternative (ParserT e m) where
+instance (Monad m) => Alternative (ParserT e m) where
   empty = emptyP
   p1 <|> p2 = altP [p1, p2]
   many = fmap toList . repeatP
@@ -347,61 +347,61 @@ type Parser e = ParserT e Identity
 instance MonadTrans (ParserT e) where
   lift ma = ParserT (\j -> lift ma >>= j . Right)
 
-instance MonadIO m => MonadIO (ParserT e m) where
+instance (MonadIO m) => MonadIO (ParserT e m) where
   liftIO ma = ParserT (\j -> liftIO ma >>= j . Right)
 
-instance Monad m => MonadFail (ParserT e m) where
+instance (Monad m) => MonadFail (ParserT e m) where
   fail = errP . ReasonFail . T.pack
 
-instance MonadReader r m => MonadReader r (ParserT e m) where
+instance (MonadReader r m) => MonadReader r (ParserT e m) where
   ask = ParserT (\j -> ask >>= j . Right)
   local f (ParserT g) = ParserT (local f . g)
 
-instance MonadState s m => MonadState s (ParserT e m) where
+instance (MonadState s m) => MonadState s (ParserT e m) where
   get = ParserT (\j -> lift get >>= j . Right)
   put s = ParserT (\j -> lift (put s) >>= j . Right)
   state f = ParserT (\j -> lift (state f) >>= j . Right)
 
-instance Semigroup a => Semigroup (ParserT e m a) where
+instance (Semigroup a) => Semigroup (ParserT e m a) where
   p <> q = liftA2 (<>) p q
 
-instance Monoid a => Monoid (ParserT e m a) where
+instance (Monoid a) => Monoid (ParserT e m a) where
   mempty = pure mempty
 
 -- private
-finishParserT :: Monad m => ParserT e m a -> St -> m (Either (Err e) a, St)
+finishParserT :: (Monad m) => ParserT e m a -> St -> m (Either (Err e) a, St)
 finishParserT (ParserT g) st =
   let t = g (either throwError pure)
   in  runT t st
 
 -- private
-getP :: Monad m => ParserT e m St
+getP :: (Monad m) => ParserT e m St
 getP = ParserT (\j -> get >>= j . Right)
 
 -- private
-getsP :: Monad m => (St -> a) -> ParserT e m a
+getsP :: (Monad m) => (St -> a) -> ParserT e m a
 getsP f = ParserT (\j -> gets f >>= j . Right)
 
 -- private
-putP :: Monad m => St -> ParserT e m ()
+putP :: (Monad m) => St -> ParserT e m ()
 putP st = ParserT (\j -> put st >>= j . Right)
 
 -- private
-stateP :: Monad m => (St -> (a, St)) -> ParserT e m a
+stateP :: (Monad m) => (St -> (a, St)) -> ParserT e m a
 stateP f = ParserT (\j -> state f >>= j . Right)
 
 -- private
-errP :: Monad m => Reason e (Err e) -> ParserT e m a
+errP :: (Monad m) => Reason e (Err e) -> ParserT e m a
 errP re = ParserT (\j -> mkErrT re >>= j . Left)
 
 -- private
-leftoverP :: Monad m => ParserT e m Int
+leftoverP :: (Monad m) => ParserT e m Int
 leftoverP = getsP (\st -> let Span s e = stSpan st in e - s)
 
 -- | Run a parser transformer. You must consume all input or this will error!
 -- If you really don't care about the rest of the input, you can always
 -- discard it with 'dropAllP'.
-parseT :: Monad m => ParserT e m a -> Text -> m (Either (Err e) a)
+parseT :: (Monad m) => ParserT e m a -> Text -> m (Either (Err e) a)
 parseT p h = fmap fst (finishParserT (p <* endP) (St h (textSpan h) Empty))
 
 -- | Run a parser (see 'parseT')
@@ -409,7 +409,7 @@ parse :: Parser e a -> Text -> Either (Err e) a
 parse p h = runIdentity (parseT p h)
 
 -- | Run a parser and print any errors that occur
-parseI :: HasErrMessage e => Parser e a -> Text -> IO (Either (Err e) a)
+parseI :: (HasErrMessage e) => Parser e a -> Text -> IO (Either (Err e) a)
 parseI p h = do
   let ea = parse p h
   case ea of
@@ -423,15 +423,15 @@ parseI p h = do
 -- and the end offset will decrease as lookahead delimits the range. To evaluate
 -- the "real" range of characters consumed by a parser, construct a span with the
 -- starting offsets before and after executing a subparser.
-spanP :: Monad m => ParserT e m (Span Int)
+spanP :: (Monad m) => ParserT e m (Span Int)
 spanP = getsP stSpan
 
 -- | Throw a custom parse error
-throwP :: Monad m => e -> ParserT e m a
+throwP :: (Monad m) => e -> ParserT e m a
 throwP = errP . ReasonCustom
 
 -- | Succeed if this is the end of input
-endP :: Monad m => ParserT e m ()
+endP :: (Monad m) => ParserT e m ()
 endP = do
   l <- leftoverP
   if l == 0
@@ -439,7 +439,7 @@ endP = do
     else errP (ReasonLeftover l)
 
 -- | Makes parse success optional
-optP :: Monad m => ParserT e m a -> ParserT e m (Maybe a)
+optP :: (Monad m) => ParserT e m a -> ParserT e m (Maybe a)
 optP (ParserT g) = ParserT $ \j -> do
   st0 <- get
   g $ \case
@@ -448,7 +448,7 @@ optP (ParserT g) = ParserT $ \j -> do
 
 -- private
 subAltP
-  :: Monad m
+  :: (Monad m)
   => (Either (Err e) a -> T e m r)
   -> St
   -> Seq (AltPhase, Err e)
@@ -471,24 +471,24 @@ altP :: (Monad m, Foldable f) => f (ParserT e m a) -> ParserT e m a
 altP falts = ParserT (\j -> get >>= \st0 -> subAltP j st0 Empty (toList falts))
 
 -- | Fail with no results
-emptyP :: Monad m => ParserT e m a
+emptyP :: (Monad m) => ParserT e m a
 emptyP = ParserT (\j -> mkErrT ReasonEmpty >>= j . Left)
 
 -- | Lookahead - rewinds state if the parser succeeds, otherwise throws error
-lookP :: Monad m => ParserT e m a -> ParserT e m a
+lookP :: (Monad m) => ParserT e m a -> ParserT e m a
 lookP (ParserT g) = ParserT $ \j -> do
   st0 <- get
   g (\ea -> put st0 >> j (first (Err . ErrF (stSpan st0) . ReasonLook) ea))
 
 -- | Labels parse errors
-labelP :: Monad m => Label -> ParserT e m a -> ParserT e m a
+labelP :: (Monad m) => Label -> ParserT e m a -> ParserT e m a
 labelP lab (ParserT g) = ParserT $ \j ->
   g $ \case
     Left e -> mkErrT (ReasonLabeled lab e) >>= j . Left
     Right a -> j (Right a)
 
 -- | Expect the given text at the start of the range
-textP :: Monad m => Text -> ParserT e m Text
+textP :: (Monad m) => Text -> ParserT e m Text
 textP n = do
   o <- takeP (T.length n)
   if n == o
@@ -496,29 +496,29 @@ textP n = do
     else errP (ReasonExpect n o)
 
 -- | Saves you from importing 'void'
-textP_ :: Monad m => Text -> ParserT e m ()
+textP_ :: (Monad m) => Text -> ParserT e m ()
 textP_ = void . textP
 
 -- | Expect the given character at the start of the range
-charP :: Monad m => Char -> ParserT e m Char
+charP :: (Monad m) => Char -> ParserT e m Char
 charP = fmap T.head . textP . T.singleton
 
 -- | Saves you from importing 'void'
-charP_ :: Monad m => Char -> ParserT e m ()
+charP_ :: (Monad m) => Char -> ParserT e m ()
 charP_ = void . charP
 
 -- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
 -- Chooses first split from START to END of range (see 'infixRP').
-breakP :: Monad m => Text -> ParserT e m a -> ParserT e m a
+breakP :: (Monad m) => Text -> ParserT e m a -> ParserT e m a
 breakP tx pa = fmap fst (infixRP tx pa (pure ()))
 
 -- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
 -- Chooses splits from START to END of range (see 'someInfixRP').
-someBreakP :: Monad m => Text -> ParserT e m a -> ParserT e m a
+someBreakP :: (Monad m) => Text -> ParserT e m a -> ParserT e m a
 someBreakP tx pa = fmap fst (someInfixRP tx pa (pure ()))
 
 -- private
-splitTailP :: Monad m => Text -> ParserT e m a -> Seq a -> St -> ParserT e m (Seq a)
+splitTailP :: (Monad m) => Text -> ParserT e m a -> Seq a -> St -> ParserT e m (Seq a)
 splitTailP tx pa = go
  where
   go !acc !st = do
@@ -530,11 +530,11 @@ splitTailP tx pa = go
 -- | Split on the delimiter, parsing segments with a narrowed range, until parsing fails.
 -- Returns the sequence of successes with state at the delimiter preceding the failure (or end of input),
 -- Note that this will always succeed, sometimes consuming no input and yielding empty results.
-splitP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+splitP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
 splitP tx pa = getP >>= splitTailP tx pa Empty
 
 -- | Like 'splitP' but ensures the sequence is at least length 1.
-split1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+split1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
 split1P tx pa = do
   mz <- optInfixRP tx pa (pure ())
   case mz of
@@ -543,7 +543,7 @@ split1P tx pa = do
 
 -- | Like 'splitP' but ensures the sequence is at least length 2.
 -- (This ensures there is at least one delimiter included.)
-split2P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+split2P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
 split2P tx pa = do
   a0 <- someBreakP tx pa
   mz <- optInfixRP tx pa (pure ())
@@ -552,7 +552,7 @@ split2P tx pa = do
     Just (a1, st', _) -> splitTailP tx pa (Empty :|> a0 :|> a1) st'
 
 -- | Like 'splitP' but ensures a leading delimiter
-leadP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+leadP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
 leadP tx pa = do
   mu <- optP (textP tx)
   case mu of
@@ -560,11 +560,11 @@ leadP tx pa = do
     Just _ -> split1P tx pa
 
 -- | Like 'split1P' but ensures a leading delimiter
-lead1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+lead1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
 lead1P tx pa = textP tx >> split1P tx pa
 
 -- | Like 'splitP' but ensures a trailing delimiter
-trailP :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+trailP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
 trailP tx pa = do
   as <- splitP tx pa
   case as of
@@ -572,12 +572,12 @@ trailP tx pa = do
     _ -> as <$ textP tx
 
 -- | Like 'split1P' but ensures a trailing delimiter
-trail1P :: Monad m => Text -> ParserT e m a -> ParserT e m (Seq a)
+trail1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
 trail1P tx pa = split1P tx pa <* textP tx
 
 -- private
 subInfixP
-  :: Monad m
+  :: (Monad m)
   => St
   -> ParserT e m a
   -> ParserT e m b
@@ -608,7 +608,7 @@ subInfixP st0 pa pb j = go Empty
                 Right c -> pure c
 
 -- private
-optInfixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (a, St, b))
+optInfixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (a, St, b))
 optInfixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (optInfixFn j) (breakAllRP tx st0))
 
 -- private
@@ -621,7 +621,7 @@ optInfixFn j e = case e of
 
 -- private
 requireInfixFn
-  :: Monad m
+  :: (Monad m)
   => (Either (Err e) (a, b) -> T e m r)
   -> (Either (Err e) (Maybe (a, St, b)) -> T e m r)
 requireInfixFn j = \case
@@ -633,16 +633,16 @@ requireInfixFn j = \case
 
 -- | Right-associative infix parsing. Searches for the operator from START to END of range,
 -- trying only the first break point.
-infixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
+infixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
 infixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (requireInfixFn j) (maybeToList (breakRP tx st0)))
 
 -- | Right-associative infix parsing. Searches for the operator from START to END of range,
 -- trying subsequent break points until success.
-someInfixRP :: Monad m => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
+someInfixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
 someInfixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (requireInfixFn j) (breakAllRP tx st0))
 
 -- | Take the given number of characters from the start of the range, or fewer if empty
-takeP :: Monad m => Int -> ParserT e m Text
+takeP :: (Monad m) => Int -> ParserT e m Text
 takeP i = stateP $ \st ->
   let h = stHay st
       (o, h') = T.splitAt i h
@@ -653,7 +653,7 @@ takeP i = stateP $ \st ->
   in  (o, st')
 
 -- | Take exactly the given number of characters from the start of the range, or error
-takeExactP :: Monad m => Int -> ParserT e m Text
+takeExactP :: (Monad m) => Int -> ParserT e m Text
 takeExactP i = do
   et <- stateP $ \st ->
     let h = stHay st
@@ -668,15 +668,15 @@ takeExactP i = do
     Right a -> pure a
 
 -- | Drop the given number of characters from the start of the range, or fewer if empty
-dropP :: Monad m => Int -> ParserT e m Int
+dropP :: (Monad m) => Int -> ParserT e m Int
 dropP = fmap T.length . takeP
 
 -- | Drop exactly the given number of characters from the start of the range, or error
-dropExactP :: Monad m => Int -> ParserT e m ()
+dropExactP :: (Monad m) => Int -> ParserT e m ()
 dropExactP = void . takeExactP
 
 -- | Take characters from the start of the range satisfying the predicate
-takeWhileP :: Monad m => (Char -> Bool) -> ParserT e m Text
+takeWhileP :: (Monad m) => (Char -> Bool) -> ParserT e m Text
 takeWhileP f = stateP $ \st ->
   let h = stHay st
       o = T.takeWhile f h
@@ -688,7 +688,7 @@ takeWhileP f = stateP $ \st ->
   in  (o, st')
 
 -- | Like 'takeWhileP' but ensures at least 1 character has been taken
-takeWhile1P :: Monad m => (Char -> Bool) -> ParserT e m Text
+takeWhile1P :: (Monad m) => (Char -> Bool) -> ParserT e m Text
 takeWhile1P f = do
   mt <- stateP $ \st ->
     let h = stHay st
@@ -704,15 +704,15 @@ takeWhile1P f = do
     Just a -> pure a
 
 -- | Drop characters from the start of the range satisfying the predicate
-dropWhileP :: Monad m => (Char -> Bool) -> ParserT e m Int
+dropWhileP :: (Monad m) => (Char -> Bool) -> ParserT e m Int
 dropWhileP = fmap T.length . takeWhileP
 
 -- | Like 'dropWhileP' but ensures at least 1 character has been dropped
-dropWhile1P :: Monad m => (Char -> Bool) -> ParserT e m Int
+dropWhile1P :: (Monad m) => (Char -> Bool) -> ParserT e m Int
 dropWhile1P = fmap T.length . takeWhile1P
 
 -- | Take the remaining range, leaving it empty
-takeAllP :: Monad m => ParserT e m Text
+takeAllP :: (Monad m) => ParserT e m Text
 takeAllP = stateP $ \st ->
   let h = stHay st
       r = stSpan st
@@ -721,7 +721,7 @@ takeAllP = stateP $ \st ->
   in  (h, st')
 
 -- | Like 'takeAllP' but ensures at least 1 character has been taken
-takeAll1P :: Monad m => ParserT e m Text
+takeAll1P :: (Monad m) => ParserT e m Text
 takeAll1P = do
   mt <- stateP $ \st ->
     let h = stHay st
@@ -734,11 +734,11 @@ takeAll1P = do
     Just a -> pure a
 
 -- | Drop the remaining range, leaving it empty
-dropAllP :: Monad m => ParserT e m Int
+dropAllP :: (Monad m) => ParserT e m Int
 dropAllP = fmap T.length takeAllP
 
 -- | Like 'dropAllP' but ensures at least 1 character has been dropped
-dropAll1P :: Monad m => ParserT e m Int
+dropAll1P :: (Monad m) => ParserT e m Int
 dropAll1P = fmap T.length takeAll1P
 
 -- | Unwrap a monad transformer layer (see 'scopeP' for use)
@@ -750,7 +750,7 @@ transP f (ParserT g) = ParserT $ \j -> do
   either throwError pure ea
 
 -- | Parse with some local state
-scopeP :: Monad m => s -> ParserT e (StateT s m) a -> ParserT e m a
+scopeP :: (Monad m) => s -> ParserT e (StateT s m) a -> ParserT e m a
 scopeP s0 = transP (`evalStateT` s0)
 
 -- | Repeats the parser until it returns a 'Just' value
@@ -762,7 +762,7 @@ iterP p = go
 data StrState = StrState !Bool !(Seq Char)
 
 -- | Parse a string with a custom quote character. Supports backslash-escaping.
-strP :: Monad m => Char -> ParserT e m Text
+strP :: (Monad m) => Char -> ParserT e m Text
 strP d = do
   textP_ (T.singleton d)
   scopeP (StrState False Empty) $ iterP $ do
@@ -782,18 +782,18 @@ strP d = do
             else (Nothing, StrState False (buf :|> c))
 
 -- | Parse a double-quoted string
-doubleStrP :: Monad m => ParserT e m Text
+doubleStrP :: (Monad m) => ParserT e m Text
 doubleStrP = strP '"'
 
 -- | Parse a single-quoted string
-singleStrP :: Monad m => ParserT e m Text
+singleStrP :: (Monad m) => ParserT e m Text
 singleStrP = strP '\''
 
 -- | Parse between an opening delimiter (first parser) and a closing delimited (second parser)
 betweenP :: ParserT e m x -> ParserT e m y -> ParserT e m a -> ParserT e m a
 betweenP px py pa = px *> pa <* py
 
-repeatTailP :: Monad m => ParserT e m a -> Seq a -> ParserT e m (Seq a)
+repeatTailP :: (Monad m) => ParserT e m a -> Seq a -> ParserT e m (Seq a)
 repeatTailP p = go
  where
   go !acc = do
@@ -803,15 +803,15 @@ repeatTailP p = go
       Just a -> go (acc :|> a)
 
 -- | Repeat a parser until it fails, collecting the results.
-repeatP :: Monad m => ParserT e m a -> ParserT e m (Seq a)
+repeatP :: (Monad m) => ParserT e m a -> ParserT e m (Seq a)
 repeatP p = repeatTailP p Empty
 
 -- | Like 'repeatP' but ensures at least one result.
-repeat1P :: Monad m => ParserT e m a -> ParserT e m (Seq a)
+repeat1P :: (Monad m) => ParserT e m a -> ParserT e m (Seq a)
 repeat1P p = p >>= repeatTailP p . Seq.singleton
 
 -- private
-sepByTailP :: Monad m => ParserT e m () -> ParserT e m a -> Seq a -> ParserT e m (Seq a)
+sepByTailP :: (Monad m) => ParserT e m () -> ParserT e m a -> Seq a -> ParserT e m (Seq a)
 sepByTailP pu pa = go
  where
   go !acc = do
@@ -821,15 +821,15 @@ sepByTailP pu pa = go
       Just a -> go (acc :|> a)
 
 -- | Parse a sequence of items delimited by the first parser
-sepByP :: Monad m => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
+sepByP :: (Monad m) => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
 sepByP pu pa = optP pa >>= maybe (pure Empty) (sepByTailP pu pa . Seq.singleton)
 
 -- | Like 'sepByP' but ensures at least one result.
-sepBy1P :: Monad m => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
+sepBy1P :: (Monad m) => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
 sepBy1P pu pa = pa >>= sepByTailP pu pa . Seq.singleton
 
 -- | Like 'sepByP' but ensures at least two results (and at least one delimiter).
-sepBy2P :: Monad m => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
+sepBy2P :: (Monad m) => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
 sepBy2P pu pa = do
   a0 <- pa
   pu
@@ -837,23 +837,23 @@ sepBy2P pu pa = do
   sepByTailP pu pa (Empty :|> a0 :|> a1)
 
 -- | Consumes many spaces at the start of the range
-spaceP :: Monad m => ParserT e m ()
+spaceP :: (Monad m) => ParserT e m ()
 spaceP = void (dropWhileP isSpace)
 
 -- | Strips spaces before and after parsing
-stripP :: Monad m => ParserT e m a -> ParserT e m a
+stripP :: (Monad m) => ParserT e m a -> ParserT e m a
 stripP p = spaceP *> p <* spaceP
 
 -- | Strips spaces before parsing
-stripStartP :: Monad m => ParserT e m a -> ParserT e m a
+stripStartP :: (Monad m) => ParserT e m a -> ParserT e m a
 stripStartP p = spaceP *> p
 
 -- | Strips spaces after parsing
-stripEndP :: Monad m => ParserT e m a -> ParserT e m a
+stripEndP :: (Monad m) => ParserT e m a -> ParserT e m a
 stripEndP p = p <* spaceP
 
 -- | Parses and returns the length of the consumed input along with the result
-measureP :: Monad m => ParserT e m a -> ParserT e m (a, Int)
+measureP :: (Monad m) => ParserT e m a -> ParserT e m (a, Int)
 measureP p = do
   start <- getsP (spanStart . stSpan)
   a <- p
@@ -862,7 +862,7 @@ measureP p = do
 
 -- | Takes exactly 1 character from the start of the range, returning Nothing
 -- if at end of input
-unconsP :: Monad m => ParserT e m (Maybe Char)
+unconsP :: (Monad m) => ParserT e m (Maybe Char)
 unconsP = stateP $ \st ->
   let h = stHay st
       mxy = T.uncons h
@@ -876,11 +876,11 @@ unconsP = stateP $ \st ->
 
 -- | Takes exactly 1 character from the start of the range, throwing error
 -- if at end of input
-headP :: Monad m => ParserT e m Char
+headP :: (Monad m) => ParserT e m Char
 headP = unconsP >>= maybe (errP (ReasonDemand 1 0)) pure
 
 -- | Add signed-ness to any parser with a negate function
-signedWithP :: Monad m => (a -> a) -> ParserT e m a -> ParserT e m a
+signedWithP :: (Monad m) => (a -> a) -> ParserT e m a -> ParserT e m a
 signedWithP neg p = do
   ms <- optP (charP '-')
   case ms of
@@ -892,19 +892,19 @@ signedP :: (Monad m, Num a) => ParserT e m a -> ParserT e m a
 signedP = signedWithP negate
 
 -- | Parse an signed integer
-intP :: Monad m => ParserT e m Integer
+intP :: (Monad m) => ParserT e m Integer
 intP = signedP uintP
 
 -- | Parse an unsigned integer
-uintP :: Monad m => ParserT e m Integer
+uintP :: (Monad m) => ParserT e m Integer
 uintP = T.foldl' (\n d -> n * 10 + fromIntegral (digitToInt d)) 0 <$> takeWhile1P isDigit
 
 -- | Parse a signed decimal
-decP :: Monad m => ParserT e m Rational
+decP :: (Monad m) => ParserT e m Rational
 decP = signedP udecP
 
 -- | Parse an unsigned decimal
-udecP :: Monad m => ParserT e m Rational
+udecP :: (Monad m) => ParserT e m Rational
 udecP = do
   whole <- fmap fromInteger uintP
   hasDot <- fmap isJust (optP (charP '.'))
@@ -917,11 +917,11 @@ udecP = do
     else pure whole
 
 -- | Parse a signed scientific number
-sciP :: Monad m => ParserT e m Scientific
+sciP :: (Monad m) => ParserT e m Scientific
 sciP = signedP usciP
 
 -- | Parse an unsigned scientific  number
-usciP :: Monad m => ParserT e m Scientific
+usciP :: (Monad m) => ParserT e m Scientific
 usciP = do
   whole <- uintP
   hasDot <- fmap isJust (optP (charP_ '.'))
@@ -933,11 +933,11 @@ usciP = do
   pure (wholeS + partS)
 
 -- | Parse a signed integer/scientific number, defaulting to integer if possible.
-numP :: Monad m => ParserT e m (Either Integer Scientific)
+numP :: (Monad m) => ParserT e m (Either Integer Scientific)
 numP = signedWithP (bimap negate negate) unumP
 
 -- | Parse an unsigned integer/scientific number, defaulting to integer if possible.
-unumP :: Monad m => ParserT e m (Either Integer Scientific)
+unumP :: (Monad m) => ParserT e m (Either Integer Scientific)
 unumP = do
   whole <- uintP
   hasDot <- fmap isJust (optP (charP_ '.'))
@@ -954,19 +954,19 @@ unumP = do
       pure (Right (wholeS + partS))
 
 -- | Like 'spaceP' but ensures at least 1 space removed
-space1P :: Monad m => ParserT e m ()
+space1P :: (Monad m) => ParserT e m ()
 space1P = void (dropWhile1P isSpace)
 
 -- | Like 'stripP' but ensures at least 1 space removed
-strip1P :: Monad m => ParserT e m a -> ParserT e m a
+strip1P :: (Monad m) => ParserT e m a -> ParserT e m a
 strip1P p = space1P *> p <* space1P
 
 -- | Like 'stripStartP' but ensures at least 1 space removed
-stripStart1P :: Monad m => ParserT e m a -> ParserT e m a
+stripStart1P :: (Monad m) => ParserT e m a -> ParserT e m a
 stripStart1P p = space1P *> p
 
 -- | Like 'stripEndP' but ensures at least 1 space removed
-stripEnd1P :: Monad m => ParserT e m a -> ParserT e m a
+stripEnd1P :: (Monad m) => ParserT e m a -> ParserT e m a
 stripEnd1P p = p <* space1P
 
 -- | Implement this to format custom errors. The list will be joined with `unlines`.
@@ -980,7 +980,7 @@ instance HasErrMessage Void where
 indent :: Int -> [Text] -> [Text]
 indent i = let s = T.replicate (2 * i) " " in fmap (s <>)
 
-instance HasErrMessage e => HasErrMessage (Err e) where
+instance (HasErrMessage e) => HasErrMessage (Err e) where
   getErrMessage (Err (ErrF (Span start end) re)) =
     let pos = "Error in range: (" <> T.pack (show start) <> ", " <> T.pack (show end) <> ")"
         body = case re of
@@ -1021,7 +1021,7 @@ instance HasErrMessage e => HasErrMessage (Err e) where
     in  pos : body
 
 -- | Create 'Errata' formatting a parse error
-errataE :: HasErrMessage e => FilePath -> (Int -> (E.Line, E.Column)) -> Err e -> [E.Errata]
+errataE :: (HasErrMessage e) => FilePath -> (Int -> (E.Line, E.Column)) -> Err e -> [E.Errata]
 errataE fp mkP e =
   let (line, col) = mkP (spanStart (errSpan e))
       msg = getErrMessage e
@@ -1029,12 +1029,12 @@ errataE fp mkP e =
   in  [E.Errata Nothing [block] Nothing]
 
 -- | Render a formatted error to text
-renderE :: HasErrMessage e => FilePath -> Text -> Err e -> Text
+renderE :: (HasErrMessage e) => FilePath -> Text -> Err e -> Text
 renderE fp h e =
   let v = calculateLineCol h
       mkP i = let (l, c) = lookupLineCol i v in (l + 1, c + 1)
   in  TL.toStrict (E.prettyErrors h (errataE fp mkP e))
 
 -- | Print a formatted error to stderr
-printE :: HasErrMessage e => FilePath -> Text -> Err e -> IO ()
+printE :: (HasErrMessage e) => FilePath -> Text -> Err e -> IO ()
 printE fp h e = TIO.hPutStrLn stderr (renderE fp h e)
