@@ -8,6 +8,7 @@ name:           looksee
 version:        0.5.1
 synopsis:       A simple text parser with decent errors
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
+category:       Parsing
 homepage:       https://github.com/ejconlon/looksee#readme
 bug-reports:    https://github.com/ejconlon/looksee/issues
 author:         Eric Conlon

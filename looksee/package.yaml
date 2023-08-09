@@ -9,6 +9,7 @@ copyright: (c) 2023 Eric Conlon
 synopsis: A simple text parser with decent errors
 description: Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 tested-with: GHC == 9.4.5
+category: Parsing
 
 language: GHC2021
 
