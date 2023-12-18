@@ -1,11 +1,11 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.35.2.
+-- This file has been generated from package.yaml by hpack version 0.36.0.
 --
 -- see: https://github.com/sol/hpack
 
 name:           looksee
-version:        0.5.1
+version:        0.5.2
 synopsis:       A simple text parser with decent errors
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 category:       Parsing
@@ -61,11 +61,11 @@ library
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds
   build-depends:
       base >=4.12 && <5
-    , bifunctors ==5.5.*
+    , bifunctors >=5.5 && <5.7
     , containers ==0.6.*
     , errata >=0.4.0.1 && <0.5
     , mmorph ==1.2.*
-    , mtl ==2.2.*
+    , mtl >=2.2 && <2.4
     , recursion-schemes ==5.2.*
     , scientific ==0.3.*
     , text >=1.2 && <2.1
@@ -107,12 +107,12 @@ test-suite looksee-test
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base >=4.12 && <5
-    , bifunctors ==5.5.*
+    , bifunctors >=5.5 && <5.7
     , containers ==0.6.*
     , errata >=0.4.0.1 && <0.5
     , looksee
     , mmorph ==1.2.*
-    , mtl ==2.2.*
+    , mtl >=2.2 && <2.4
     , recursion-schemes ==5.2.*
     , scientific ==0.3.*
     , tasty
