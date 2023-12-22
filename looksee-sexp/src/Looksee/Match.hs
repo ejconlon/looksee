@@ -14,8 +14,6 @@ module Looksee.Match
   , altM
   , anySymM
   , symM
-  , anyKeyM
-  , keyM
   , anyIntM
   , intM
   , anySciM
@@ -36,7 +34,7 @@ import Data.Scientific (Scientific)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
-import Looksee.Sexp (Atom (..), AtomType (..), Brace, Keyword, SexpF (..), SexpType (..), Symbol (..))
+import Looksee.Sexp (Atom (..), AtomType (..), Brace, SexpF (..), SexpType (..), Symbol (..))
 
 data MatchErr e r
   = MatchErrType !SexpType
@@ -207,16 +205,6 @@ symM :: Symbol -> MatchM e s ()
 symM x =
   anySymM >>= \y ->
     unless (y == x) (errM (MatchErrNotEq (AtomSym x)))
-
-anyKeyM :: MatchM e s Keyword
-anyKeyM = matchM $ \case
-  SexpAtomF (AtomKey y) -> Right y
-  _ -> Left (MatchErrType (SexpTypeAtom AtomTypeKey))
-
-keyM :: Keyword -> MatchM e s ()
-keyM x =
-  anyKeyM >>= \y ->
-    unless (y == x) (errM (MatchErrNotEq (AtomKey x)))
 
 anyIntM :: MatchM e s Integer
 anyIntM = matchM $ \case

@@ -3,7 +3,6 @@
 
 module Looksee.Sexp
   ( Symbol (..)
-  , Keyword (..)
   , Atom (..)
   , AtomType (..)
   , Brace (..)
@@ -42,17 +41,9 @@ newtype Symbol = Symbol {unSymbol :: Text}
   deriving stock (Show)
   deriving newtype (Eq, Ord, IsString, Pretty)
 
-newtype Keyword = Keyword {unKeyword :: Text}
-  deriving stock (Show)
-  deriving newtype (Eq, Ord, IsString)
-
-instance Pretty Keyword where
-  pretty = ("#" <>) . pretty . unKeyword
-
 -- | Leaves of S-expression trees
 data Atom
   = AtomSym !Symbol
-  | AtomKey !Keyword
   | AtomInt !Integer
   | AtomSci !Scientific
   | AtomStr !Text
@@ -61,14 +52,12 @@ data Atom
 instance Pretty Atom where
   pretty = \case
     AtomSym x -> pretty x
-    AtomKey x -> pretty x
     AtomInt x -> pretty x
     AtomSci x -> P.viaShow x
     AtomStr x -> "\"" <> pretty x <> "\""
 
 data AtomType
   = AtomTypeSym
-  | AtomTypeKey
   | AtomTypeInt
   | AtomTypeSci
   | AtomTypeStr
@@ -77,7 +66,6 @@ data AtomType
 atomType :: Atom -> AtomType
 atomType = \case
   AtomSym _ -> AtomTypeSym
-  AtomKey _ -> AtomTypeKey
   AtomInt _ -> AtomTypeInt
   AtomSci _ -> AtomTypeSci
   AtomStr _ -> AtomTypeStr
@@ -169,9 +157,6 @@ instance IsSexp Integer where
 instance IsSexp Symbol where
   toSexp = toSexp . AtomSym
 
-instance IsSexp Keyword where
-  toSexp = toSexp . AtomKey
-
 sexpList :: Brace -> [Sexp] -> Sexp
 sexpList b = Sexp . SexpListF b . Seq.fromList
 
@@ -228,11 +213,9 @@ sexpParser = L.stripP rootP
       Just c | c == ';' || isSpace c -> spaceP
       _ -> L.space1P -- Fail with this
   symP = look1P identStartPred *> L.takeWhile1P identContPred
-  keyP = L.charP_ '#' *> symP
   atomP =
     L.altP
       [ L.labelP "sym" (AtomSym . Symbol <$> symP)
-      , L.labelP "key" (AtomKey . Keyword <$> keyP)
       , L.labelP "int" (AtomInt <$> L.intP)
       , L.labelP "sci" (AtomSci <$> L.sciP)
       , L.labelP "str" (AtomStr <$> L.strP '"')
