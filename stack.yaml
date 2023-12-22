@@ -3,9 +3,22 @@ resolver: lts-22.0
 ghc-options:
   "$everything": -haddock
 
+allow-newer-deps:
+- falsify
+
 packages:
 - looksee
+- looksee-trip
 
 extra-deps:
 - errata-0.4.0.1
+# TODO Use released version when falsify bumps
+# - daytripper-0.3.1
+- git: git@github.com:ejconlon/daytripper.git
+  commit: f676b6e5781a51bfe9a4db34b218b696e0286392
+- falsify-0.2.0
 
+# TODO Remove when falsify bumps
+allow-newer: true
+allow-newer-deps:
+- falsify

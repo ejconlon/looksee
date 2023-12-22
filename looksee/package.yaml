@@ -8,10 +8,11 @@ maintainer: ejconlon@gmail.com
 copyright: (c) 2023 Eric Conlon
 synopsis: A simple text parser with decent errors
 description: Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
-tested-with: GHC == 9.4.5
+tested-with: GHC == 9.6.3
 category: Parsing
 
-language: GHC2021
+defaults:
+  local: ../defaults.yaml
 
 extra-source-files:
 - README.md
@@ -27,42 +28,6 @@ dependencies:
 - scientific >= 0.3 && < 0.4
 - text >= 1.2 && < 2.1
 - vector >= 0.12 && < 0.14
-
-default-extensions:
-- BangPatterns
-- ConstraintKinds
-- DataKinds
-- DeriveFunctor
-- DeriveFoldable
-- DeriveGeneric
-- DeriveTraversable
-- DerivingStrategies
-- DerivingVia
-- FlexibleContexts
-- FlexibleInstances
-- FunctionalDependencies
-- GADTs
-- GeneralizedNewtypeDeriving
-- LambdaCase
-- KindSignatures
-- MultiParamTypeClasses
-- Rank2Types
-- ScopedTypeVariables
-- StandaloneDeriving
-- TupleSections
-- TypeApplications
-- TypeOperators
-- TypeFamilies
-
-ghc-options:
-- -Wall
-- -Wcompat
-- -Widentities
-- -Wincomplete-record-updates
-- -Wincomplete-uni-patterns
-- -Wpartial-fields
-- -Wredundant-constraints
-- -fno-warn-unused-top-binds
 
 library:
   source-dirs: src

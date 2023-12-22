@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 
-name:           looksee
+name:           looksee-trip
 version:        0.5.2
 synopsis:       A simple text parser with decent errors
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
@@ -27,10 +27,9 @@ source-repository head
 
 library
   exposed-modules:
-      Looksee
-      Looksee.Examples
+      Looksee.Trip
   other-modules:
-      Paths_looksee
+      Paths_looksee_trip
   hs-source-dirs:
       src
   default-extensions:
@@ -61,62 +60,5 @@ library
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds
   build-depends:
       base >=4.12 && <5
-    , bifunctors >=5.5 && <5.7
-    , containers ==0.6.*
-    , errata >=0.4.0.1 && <0.5
-    , mmorph ==1.2.*
-    , mtl >=2.2 && <2.4
-    , recursion-schemes ==5.2.*
-    , scientific ==0.3.*
-    , text >=1.2 && <2.1
-    , vector >=0.12 && <0.14
-  default-language: GHC2021
-
-test-suite looksee-test
-  type: exitcode-stdio-1.0
-  main-is: Main.hs
-  other-modules:
-      Paths_looksee
-  hs-source-dirs:
-      test
-  default-extensions:
-      BangPatterns
-      ConstraintKinds
-      DataKinds
-      DeriveFunctor
-      DeriveFoldable
-      DeriveGeneric
-      DeriveTraversable
-      DerivingStrategies
-      DerivingVia
-      FlexibleContexts
-      FlexibleInstances
-      FunctionalDependencies
-      GADTs
-      GeneralizedNewtypeDeriving
-      LambdaCase
-      KindSignatures
-      MultiParamTypeClasses
-      Rank2Types
-      ScopedTypeVariables
-      StandaloneDeriving
-      TupleSections
-      TypeApplications
-      TypeOperators
-      TypeFamilies
-  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds -threaded -rtsopts -with-rtsopts=-N
-  build-depends:
-      base >=4.12 && <5
-    , bifunctors >=5.5 && <5.7
-    , containers ==0.6.*
-    , errata >=0.4.0.1 && <0.5
-    , looksee
-    , mmorph ==1.2.*
-    , mtl >=2.2 && <2.4
-    , recursion-schemes ==5.2.*
-    , scientific ==0.3.*
-    , tasty
-    , tasty-hunit
-    , text >=1.2 && <2.1
-    , vector >=0.12 && <0.14
+    , daytripper ==0.3.*
   default-language: GHC2021
