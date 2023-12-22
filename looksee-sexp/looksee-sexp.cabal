@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 
-name:           looksee-trip
+name:           looksee-sexp
 version:        0.5.3
 synopsis:       A simple text parser with decent errors
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
@@ -27,9 +27,10 @@ source-repository head
 
 library
   exposed-modules:
-      Test.Looksee.Trip
+      Looksee.Match
+      Looksee.Sexp
   other-modules:
-      Paths_looksee_trip
+      Paths_looksee_sexp
   hs-source-dirs:
       src
   default-extensions:
@@ -62,8 +63,13 @@ library
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds
   build-depends:
       base >=4.12 && <5
-    , daytripper ==0.3.*
+    , bowtie ==0.1.*
+    , containers ==0.6.*
+    , foldl ==1.4.*
     , looksee ==0.5.*
+    , mtl >=2.3 && <2.5
     , prettyprinter ==1.7.*
+    , recursion-schemes ==5.2.*
+    , scientific ==0.3.*
     , text ==2.0.*
   default-language: GHC2021

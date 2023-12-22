@@ -1,0 +1,46 @@
+name: looksee-sexp
+version: 0.5.3
+
+github: ejconlon/looksee
+license: BSD3
+author: Eric Conlon
+maintainer: ejconlon@gmail.com
+copyright: (c) 2023 Eric Conlon
+synopsis: A simple text parser with decent errors
+description: Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
+tested-with: GHC == 9.6.3
+category: Parsing
+
+defaults:
+  local: ../defaults.yaml
+
+extra-source-files:
+- README.md
+
+dependencies:
+- base >= 4.12 && < 5
+- bowtie >= 0.1 && < 0.2
+- containers >= 0.6 && < 0.7
+- foldl >= 1.4 && < 1.5
+- looksee >= 0.5 && < 0.6
+- mtl >= 2.3 && < 2.5
+- prettyprinter >= 1.7 && < 1.8
+- recursion-schemes >= 5.2 && < 5.3
+- scientific >= 0.3 && < 0.4
+- text >= 2.0 && < 2.1
+
+library:
+  source-dirs: src
+
+# tests:
+#   looksie-sexp-test:
+#     main: Main.hs
+#     source-dirs: test
+#     ghc-options:
+#     - -threaded
+#     - -rtsopts
+#     - -with-rtsopts=-N
+#     dependencies:
+#     - looksee
+#     - tasty
+#     - tasty-hunit

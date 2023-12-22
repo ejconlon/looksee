@@ -5,12 +5,26 @@
 
 packages:
 - completed:
+    hackage: bowtie-0.1.0@sha256:ea576079a0f4469694b43ff4214ba1fbd27a359c560125ebbe52e0bfafa3e190,1771
+    pantry-tree:
+      sha256: 99b78d269df9bffe9a29264cf6d8cd023674df98f32070ee1718142c1bed7418
+      size: 158
+  original:
+    hackage: bowtie-0.1.0
+- completed:
     hackage: errata-0.4.0.1@sha256:c535562dc79845190134bcd833a9fb3d8148361360085b1de917dded6044348d,2369
     pantry-tree:
       sha256: f6d4132b0ae34a2c8b3a5a73e51cc77744f5e6925fe32d071543e1dd80d14896
       size: 809
   original:
     hackage: errata-0.4.0.1
+- completed:
+    hackage: falsify-0.2.0@sha256:a9ec175cfb20dc5afeedac69f424c77589729fce23733030abf22dc2053abc41,5265
+    pantry-tree:
+      sha256: c798208320e84b3d05564d73a63c6686499a68d667e33e2b8873035f15eaf81b
+      size: 3378
+  original:
+    hackage: falsify-0.2.0
 - completed:
     commit: f676b6e5781a51bfe9a4db34b218b696e0286392
     git: git@github.com:ejconlon/daytripper.git
@@ -22,13 +36,6 @@ packages:
   original:
     commit: f676b6e5781a51bfe9a4db34b218b696e0286392
     git: git@github.com:ejconlon/daytripper.git
-- completed:
-    hackage: falsify-0.2.0@sha256:a9ec175cfb20dc5afeedac69f424c77589729fce23733030abf22dc2053abc41,5265
-    pantry-tree:
-      sha256: c798208320e84b3d05564d73a63c6686499a68d667e33e2b8873035f15eaf81b
-      size: 3378
-  original:
-    hackage: falsify-0.2.0
 snapshots:
 - completed:
     sha256: e176944bc843f740e05242fa7a66ca1f440c127e425254f7f1257f9b19add23f

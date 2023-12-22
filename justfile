@@ -1,5 +1,5 @@
 stack_build := "stack build --fast"
-src_dirs := "looksee looksee-trip"
+src_dirs := "looksee looksee-sexp looksee-trip"
 
 # No default tasks
 default:

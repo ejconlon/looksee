@@ -1,3 +1,3 @@
-# looksee
+# looksee-trip
 
-A simple text parser with decent errors
+Roundtrip testing for looksee parsers

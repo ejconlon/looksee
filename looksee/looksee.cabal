@@ -51,6 +51,8 @@ library
       LambdaCase
       KindSignatures
       MultiParamTypeClasses
+      MultiWayIf
+      PatternSynonyms
       Rank2Types
       ScopedTypeVariables
       StandaloneDeriving
@@ -97,6 +99,8 @@ test-suite looksee-test
       LambdaCase
       KindSignatures
       MultiParamTypeClasses
+      MultiWayIf
+      PatternSynonyms
       Rank2Types
       ScopedTypeVariables
       StandaloneDeriving
