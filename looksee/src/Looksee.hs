@@ -23,6 +23,7 @@ module Looksee
   , parse
   , parseI
   , spanP
+  , spanAroundP
   , throwP
   , altP
   , emptyP
@@ -422,9 +423,17 @@ parseI p h = do
 -- an `n`-character document. The start offset will increase as input is consumed,
 -- and the end offset will decrease as lookahead delimits the range. To evaluate
 -- the "real" range of characters consumed by a parser, construct a span with the
--- starting offsets before and after executing a subparser.
+-- starting offsets before and after executing a subparser (or use 'spanAroundP').
 spanP :: (Monad m) => ParserT e m (Span Int)
 spanP = getsP stSpan
+
+-- | Incorporate span information into a parsed object.
+spanAroundP :: (Monad m) => (Span Int -> a -> b) -> ParserT e m a -> ParserT e m b
+spanAroundP f p = do
+  Span start _ <- spanP
+  a <- p
+  Span end _ <- spanP
+  pure (f (Span start end) a)
 
 -- | Throw a custom parse error
 throwP :: (Monad m) => e -> ParserT e m a
