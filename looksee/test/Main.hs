@@ -3,7 +3,7 @@
 
 module Main (main) where
 
-import Control.Applicative (Alternative (..), liftA2)
+import Control.Applicative (Alternative (..))
 import Control.Exception (throwIO)
 import Control.Monad (join)
 import Data.Foldable (for_, toList)

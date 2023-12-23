@@ -98,7 +98,7 @@ module Looksee
   )
 where
 
-import Control.Applicative (Alternative (..), liftA2)
+import Control.Applicative (Alternative (..))
 import Control.Exception (Exception)
 import Control.Monad (ap, void)
 import Control.Monad.Except (ExceptT, MonadError (..), runExceptT)
