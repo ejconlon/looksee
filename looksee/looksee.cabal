@@ -30,6 +30,7 @@ library
       Looksee
       Looksee.Base
       Looksee.Examples
+      Looksee.Extra
       Looksee.V2
   other-modules:
       Paths_looksee

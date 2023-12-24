@@ -31,8 +31,8 @@ nextPoint x (Point o l c) =
     then Point (o + 1) (l + 1) 0
     else Point (o + 1) l (c + 1)
 
-nextPoint' :: Text -> Point -> Point
-nextPoint' t p = T.foldl' (flip nextPoint) p t
+foldPoint :: Text -> Point -> Point
+foldPoint t p = T.foldl' (flip nextPoint) p t
 
 data Span = Span {spanStart :: !Point, spanEnd :: !Point}
   deriving stock (Eq, Ord, Show)
