@@ -38,7 +38,7 @@ packages:
     git: git@github.com:ejconlon/daytripper.git
 snapshots:
 - completed:
-    sha256: e176944bc843f740e05242fa7a66ca1f440c127e425254f7f1257f9b19add23f
-    size: 712153
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/0.yaml
-  original: lts-22.0
+    sha256: 59a9ffb31115282819f15dbb364bd06f133009442ff1b5f3b3898bd0e6a7735d
+    size: 711946
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/1.yaml
+  original: lts-22.1

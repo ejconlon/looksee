@@ -66,7 +66,7 @@ data Reason e r
   = ReasonCustom !e
   | ReasonExpect !Text !Text
   | ReasonDemand !Int !Int
-  | ReasonLeftover !Int
+  | ReasonLeftover !(Maybe Int)
   | ReasonAlt !(Seq (AltPhase, r))
   | ReasonInfix !(Seq (Int, InfixPhase, r))
   | ReasonFail !Text
