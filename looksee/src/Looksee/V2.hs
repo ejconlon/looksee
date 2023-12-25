@@ -6,7 +6,7 @@ module Looksee.V2
   , parseT
   , parse
   , parseIncT
-  -- , parseInc
+  , parseInc
   , spanP
   , lengthP
   , throwP
@@ -41,9 +41,11 @@ module Looksee.V2
 where
 
 import Control.Applicative (Alternative (..))
-import Control.Foldl (Fold (..), FoldM (..))
+import Control.Foldl (FoldM (..))
 import Control.Monad (ap, void)
+import Control.Monad.Except (Except, ExceptT, MonadError (..), runExceptT)
 import Control.Monad.IO.Class (MonadIO (..))
+import Control.Monad.Morph (hoist)
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.State.Strict (MonadState (..))
 import Control.Monad.Trans (MonadTrans (..))
@@ -100,17 +102,7 @@ sealSt st@(St buf bounds@(Bounds (Point startOff _ _) mayEnd) _) =
 bufAddSt :: St -> Text -> St
 bufAddSt st t = st {stBuf = stBuf st <> TL.fromStrict t}
 
--- data F e m a r =
---     FPure !a
---   | FCatch (m r) (Err e -> m r)
---   deriving stock (Functor)
---
--- instance (Functor m) => Bifunctor (F e m) where
---   bimap f g = \case
---     FPure _ -> _
---     FCatch _ _ -> undefined
---
--- newtype M e m a = M { unM :: F e m a (M e m a) }
+type T e = ExceptT (Err e)
 
 -- private
 data Susp r = Susp !r !St
@@ -138,7 +130,7 @@ mkElemErr :: Reason e (Err e) -> St -> Elem e m a r
 mkElemErr re st = ElemErr (mkErr re st) st
 
 type ParserT :: Type -> (Type -> Type) -> Type -> Type
-newtype ParserT e m a = ParserT {unParserT :: forall r. (Elem e m a (ParserT e m a) -> m r) -> St -> m r}
+newtype ParserT e m a = ParserT {unParserT :: forall r. (Elem e m a (ParserT e m a) -> T e m r) -> St -> T e m r}
 
 instance (Functor m) => Functor (ParserT e m) where
   fmap f = go
@@ -158,7 +150,7 @@ instance (Functor m) => Monad (ParserT e m) where
 type Parser e = ParserT e Identity
 
 instance MonadTrans (ParserT e) where
-  lift ma = ParserT (\k st -> ma >>= \a -> k (ElemPure a st))
+  lift ma = ParserT (\k st -> lift ma >>= \a -> k (ElemPure a st))
 
 instance (MonadIO m) => MonadIO (ParserT e m) where
   liftIO ma = ParserT (\k st -> liftIO ma >>= \a -> k (ElemPure a st))
@@ -212,17 +204,17 @@ leftoverP :: ParserT e m (Maybe Int)
 leftoverP = getsP (\st -> let Bounds s me = stBounds st in fmap (\e -> e - pointOffset s) me)
 
 -- private
-finishParseT :: (Monad m) => ParserT e m a -> St -> m (Either (Err e) a)
+finishParseT :: (Monad m) => ParserT e m a -> St -> T e m a
 finishParseT (ParserT p) st = flip p st $ \case
-  ElemPure a _ -> pure (Right a)
-  ElemErr e _ -> pure (Left e)
+  ElemPure a _ -> pure a
+  ElemErr e _ -> throwError e
   ElemCont (Susp q st') _ -> finishParseT q st'
 
 -- | Run a parser transformer. You must consume all input or this will error!
 -- If you really don't care about the rest of the input, you can always
 -- discard it with 'dropAllP'.
 parseT :: (Monad m) => ParserT e m a -> Text -> m (Either (Err e) a)
-parseT p = finishParseT (p <* endP) . textSt
+parseT p = runExceptT . finishParseT (p <* endP) . textSt
 
 -- | Run a parser (see 'parseT')
 parse :: Parser e a -> Text -> Either (Err e) a
@@ -237,7 +229,7 @@ parse p = runIdentity . parseT p
 --     Right _ -> pure ()
 --   pure ea
 
-parseIncT :: (Monad m) => ParserT e m a -> FoldM m Text (Either (Err e) a)
+parseIncT :: (Monad m) => ParserT e m a -> FoldM (ExceptT (Err e) m) Text a
 parseIncT (ParserT p0) = FoldM step initial extract
  where
   step el t =
@@ -249,28 +241,12 @@ parseIncT (ParserT p0) = FoldM step initial extract
         ElemCont _ jt -> let (Susp (ParserT p) st) = jt t in p pure st
   initial = p0 pure initSt
   extract = \case
-    ElemPure a _ -> pure (Right a)
-    ElemErr e _ -> pure (Left e)
+    ElemPure a _ -> pure a
+    ElemErr e _ -> throwError e
     ElemCont (Susp (ParserT p) st) _ -> p extract (sealSt st)
 
-parseInc :: Parser e a -> Fold Text (Either (Err e) a)
-parseInc (ParserT p0) = Fold step initial extract
- where
-  step el t =
-    if T.null t
-      then el
-      else case el of
-        ElemPure a st -> ElemPure a (bufAddSt st t)
-        ElemErr e st -> ElemErr e (bufAddSt st t)
-        ElemCont _ jt ->
-          let Susp (ParserT p) st = jt t
-          in  runIdentity (p Identity st)
-  initial = runIdentity (p0 Identity initSt)
-  extract = \case
-    ElemPure a _ -> Right a
-    ElemErr e _ -> Left e
-    ElemCont (Susp (ParserT p) st) _ ->
-      runIdentity (p (Identity . extract) (sealSt st))
+parseInc :: Parser e a -> FoldM (Except (Err e)) Text a
+parseInc = parseIncT
 
 -- | Return the consumed span along with the result
 spanP :: (Functor m) => ParserT e m a -> ParserT e m (a, Span)
@@ -302,13 +278,10 @@ endP = do
 
 -- | Makes parse success optional
 optP :: ParserT e m a -> ParserT e m (Maybe a)
-optP = onParser
- where
-  onParser (ParserT p) = ParserT $ \k st -> flip p st $ \case
-    ElemPure a st' -> k (ElemPure (Just a) st')
-    ElemErr _ _ -> k (ElemPure Nothing st)
-    ElemCont jz jt -> k (ElemCont (onCont jz) (onCont . jt))
-  onCont = fmap onParser
+optP (ParserT p) = ParserT $ \k st -> flip p st $ \case
+  ElemPure a st' -> k (ElemPure (Just a) st')
+  ElemErr _ _ -> k (ElemPure Nothing st)
+  ElemCont jz jt -> k (ElemCont (fmap optP jz) (fmap optP . jt))
 
 -- | Fail with no results
 emptyP :: ParserT e m a
@@ -316,25 +289,35 @@ emptyP = errP ReasonEmpty
 
 -- private
 subAltP
-  :: (Applicative m)
-  => (Elem e m a (ParserT e m a) -> m r)
+  :: (Monad m)
+  => (Elem e m a (ParserT e m a) -> T e m r)
   -> St
   -> Seq (AltPhase, Err e)
   -> [ParserT e m a]
-  -> m r
-subAltP k0 st0 = onLoop where
+  -> T e m r
+subAltP k0 st0 = onLoop
+ where
   onLoop !errs = \case
     [] -> k0 (mkElemErr (if Seq.null errs then ReasonEmpty else ReasonAlt errs) st0)
-    p : rest -> onParser errs p rest
-  onParser errs (ParserT p) rest = p (onElem errs rest) st0
+    p : rest -> onParser errs rest p
+  onParser errs rest (ParserT p) = p (onElem errs rest) st0
   onElem errs rest = \case
-    ElemPure _ _ -> undefined
     ElemErr e _ -> onLoop (errs :|> (AltPhaseBranch, e)) rest
-    ElemCont _ _ -> undefined
+    el -> catchError (k0 el) (\e -> onLoop (errs :|> (AltPhaseCont, e)) rest)
 
 -- | Parse with many possible branches
-altP :: (Applicative m) => [ParserT e m a] -> ParserT e m a
+altP :: (Monad m) => [ParserT e m a] -> ParserT e m a
 altP ps = ParserT (\k0 st0 -> subAltP k0 st0 Empty ps)
+
+-- private
+repeatTailP :: (Monad m) => ParserT e m a -> Seq a -> ParserT e m (Seq a)
+repeatTailP p = go
+ where
+  go !acc = do
+    ma <- optP p
+    case ma of
+      Nothing -> pure acc
+      Just a -> go (acc :|> a)
 
 -- | Repeat a parser until it fails, collecting the results.
 repeatP :: (Monad m) => ParserT e m a -> ParserT e m (Seq a)
@@ -352,11 +335,12 @@ mapElem
   -> Elem e m b (ParserT e m b)
 mapElem onPure onErr = onElem
  where
+  onParser (ParserT p) = ParserT (\k st -> p (k . onElem) st)
   onElem = \case
     ElemPure a st' -> onPure a st'
     ElemErr e st' -> onErr e st'
-    ElemCont jz jt -> ElemCont (onCont jz) (onCont . jt)
-  onCont = fmap (\(ParserT p) -> ParserT (\k st -> p (k . onElem) st))
+    ElemCont jz jt -> ElemCont (onSusp jz) (onSusp . jt)
+  onSusp = fmap onParser
 
 -- | Lookahead - rewinds state if the parser succeeds, otherwise throws error
 lookP :: ParserT e m a -> ParserT e m a
@@ -391,9 +375,9 @@ charP_ :: (Applicative m) => Char -> ParserT e m ()
 charP_ = void . charP
 
 -- private
-retry
+retrying
   :: (St -> Elem e m a (ParserT e m a)) -> (St -> Maybe (Elem e m a (ParserT e m a))) -> ParserT e m a
-retry onTrunc onMore = retMore
+retrying onTrunc onMore = retMore
  where
   retTrunc = ParserT (. onTrunc)
   retMore = ParserT $ \k st ->
@@ -415,7 +399,7 @@ takeP len = ret
   ret =
     if len <= 0
       then pure T.empty
-      else retry onTrunc onMore
+      else retrying onTrunc onMore
   onTrunc !st =
     let (txt, buf') = TL.splitAt (fromIntegral len) (stBuf st)
         txt' = TL.toStrict txt
@@ -437,7 +421,7 @@ takeExactP len = ret
   ret =
     if len <= 0
       then pure T.empty
-      else retry onTrunc onMore
+      else retrying onTrunc onMore
   onTrunc !st =
     let have = fromIntegral (TL.length (stBuf st))
     in  if len - have > 0
@@ -505,23 +489,13 @@ dropAllP = fmap T.length takeAllP
 dropAll1P :: (Applicative m) => ParserT e m Int
 dropAll1P = fmap T.length takeAll1P
 
--- private
-repeatTailP :: (Monad m) => ParserT e m a -> Seq a -> ParserT e m (Seq a)
-repeatTailP p = go
- where
-  go !acc = do
-    ma <- optP p
-    case ma of
-      Nothing -> pure acc
-      Just a -> go (acc :|> a)
-
 -- | Unwrap a monad transformer layer (see 'scopeP' for use)
 transP :: (MonadTrans t, Monad m) => (forall a. t m a -> m a) -> ParserT e (t m) b -> ParserT e m b
 transP nat = onParser
  where
-  onParser (ParserT p) = ParserT (\k st -> nat (p (lift . k . onElem) st))
+  onParser (ParserT p) = ParserT (\k st -> hoist nat (p (hoist lift . k . onElem) st))
   onElem = \case
     ElemPure a st -> ElemPure a st
     ElemErr e st -> ElemErr e st
-    ElemCont jz jt -> ElemCont (onCont jz) (onCont . jt)
-  onCont = fmap onParser
+    ElemCont jz jt -> ElemCont (onSusp jz) (onSusp . jt)
+  onSusp = fmap onParser
