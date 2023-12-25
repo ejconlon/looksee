@@ -48,6 +48,10 @@ initBounds = Bounds initPoint Nothing
 textBounds :: Text -> Bounds
 textBounds t = Bounds initPoint (Just (T.length t))
 
+-- | Increment the start point of the bounds
+foldBounds :: Text -> Bounds -> Bounds
+foldBounds t (Bounds s me) = Bounds (foldPoint t s) me
+
 -- | A parser label (for error reporting)
 newtype Label = Label {unLabel :: Text}
   deriving stock (Show)

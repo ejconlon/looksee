@@ -58,6 +58,7 @@ import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
+import Data.Text.Lazy.Builder qualified as TLB
 import Looksee.Types
   ( AltPhase (..)
   , Bounds (..)
@@ -67,7 +68,7 @@ import Looksee.Types
   , Point (..)
   , Reason (..)
   , Span (..)
-  , foldPoint
+  , foldBounds
   , initBounds
   , textBounds
   )
@@ -101,6 +102,15 @@ sealSt st@(St buf bounds@(Bounds (Point startOff _ _) mayEnd) _) =
 -- private
 bufAddSt :: St -> Text -> St
 bufAddSt st t = st {stBuf = stBuf st <> TL.fromStrict t}
+
+-- private
+bufStateSt :: (TL.Text -> (TL.Text, TL.Text)) -> St -> (Text, St)
+bufStateSt f st =
+  let (ltxt, buf') = f (stBuf st)
+      txt = TL.toStrict ltxt
+      bounds' = foldBounds txt (stBounds st)
+      st' = st {stBuf = buf', stBounds = bounds'}
+  in  (txt, st')
 
 type T e = ExceptT (Err e)
 
@@ -401,11 +411,7 @@ takeP len = ret
       then pure T.empty
       else retrying onTrunc onMore
   onTrunc !st =
-    let (ltxt, buf') = TL.splitAt (fromIntegral len) (stBuf st)
-        txt = TL.toStrict ltxt
-        bounds@(Bounds start _) = stBounds st
-        bounds' = bounds {boundsStart = foldPoint txt start}
-        st' = st {stBuf = buf', stBounds = bounds'}
+    let (txt, st') = bufStateSt (TL.splitAt (fromIntegral len)) st
     in  ElemPure txt st'
   onMore st =
     let need = len - fromIntegral (TL.length (stBuf st))
@@ -427,11 +433,7 @@ takeExactP len = ret
     in  if len - have > 0
           then mkElemErr (ReasonDemand len have) st
           else
-            let (ltxt, buf') = TL.splitAt (fromIntegral len) (stBuf st)
-                txt = TL.toStrict ltxt
-                bounds@(Bounds start _) = stBounds st
-                bounds' = bounds {boundsStart = foldPoint txt start}
-                st' = st {stBuf = buf', stBounds = bounds'}
+            let (txt, st') = bufStateSt (TL.splitAt (fromIntegral len)) st
             in  ElemPure txt st'
   onMore st =
     let need = len - fromIntegral (TL.length (stBuf st))
@@ -457,9 +459,38 @@ dropP = fmap T.length . takeP
 dropExactP :: (Functor m) => Int -> ParserT e m ()
 dropExactP = void . takeExactP
 
+-- private
+retryingWith
+  :: (Functor m)
+  => (s -> St -> Elem e m (a, s) (ParserT e m (a, s)))
+  -> (s -> St -> Maybe (Elem e m (a, s) (ParserT e m (a, s))))
+  -> s
+  -> ParserT e m a
+retryingWith onTrunc onMore s0 = fmap fst (retMore s0)
+ where
+  retTrunc s = ParserT (. onTrunc s)
+  retMore s = ParserT $ \k st ->
+    k $
+      let Bounds _ mayEnd = stBounds st
+      in  case mayEnd of
+            Just _ -> onTrunc s st
+            Nothing -> case onMore s st of
+              Nothing ->
+                ElemCont
+                  (Susp (retTrunc s) st)
+                  (Susp (retMore s) . bufAddSt st)
+              Just el -> el
+
 -- | Take characters from the start of the range satisfying the predicate
 takeWhileP :: (Functor m) => (Char -> Bool) -> ParserT e m Text
-takeWhileP _f = pure T.empty -- error "TODO"
+takeWhileP f = retryingWith onTrunc onMore mempty
+ where
+  onTrunc s st =
+    let (match, st') = bufStateSt (TL.span f) st
+        s' = s <> TLB.fromText match
+        res = TL.toStrict (TLB.toLazyText s)
+    in  ElemPure (res, s') st'
+  onMore _s _st = error "TODO"
 
 -- | Like 'takeWhileP' but ensures at least 1 character has been taken
 takeWhile1P :: (Functor m) => (Char -> Bool) -> ParserT e m Text
@@ -495,10 +526,7 @@ finalizing onTrunc = retMore
 -- | Take the remaining range, leaving it empty
 takeAllP :: ParserT e m Text
 takeAllP = finalizing $ \st ->
-  let txt = TL.toStrict (stBuf st)
-      bounds@(Bounds start _) = stBounds st
-      bounds' = bounds {boundsStart = foldPoint txt start}
-      st' = st {stBuf = TL.empty, stBounds = bounds'}
+  let (txt, st') = bufStateSt (,TL.empty) st
   in  ElemPure txt st'
 
 -- | Like 'takeAllP' but ensures at least 1 character has been taken

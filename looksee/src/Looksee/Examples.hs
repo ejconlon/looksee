@@ -100,6 +100,7 @@ data Arith
 --       , labelP "var" (ArithVar <$> identP)
 --       ]
 --
+
 -- | Leaves of S-expression trees
 data Atom
   = AtomIdent !Text

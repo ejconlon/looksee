@@ -3,7 +3,6 @@
 
 module Main (main) where
 
-import Prelude hiding (span)
 import Control.Applicative (Alternative (..))
 import Control.Exception (throwIO)
 import Control.Monad (join)
@@ -18,6 +17,7 @@ import Looksee
 import Looksee.Examples
 import Test.Tasty (TestName, TestTree, defaultMain, testGroup)
 import Test.Tasty.HUnit (testCase, (@?=))
+import Prelude hiding (span)
 
 newtype Error = Error {unError :: String} deriving (Eq, Show, IsString)
 
@@ -97,14 +97,14 @@ testBasic =
       , ("takeWhile1", testTakeWhile1)
       , ("dropWhile", testDropWhile)
       , ("dropWhile1", testDropWhile1)
-      -- , ("infixR", testInfixR)
-      -- , ("someInfixR", testSomeInfixR)
-      -- , ("break", testBreak)
-      -- , ("someBreak", testSomeBreak)
-      -- , ("split", testSplit)
-      -- , ("split1", testSplit1)
-      -- , ("split2", testSplit2)
-      , ("sepBy", testSepBy)
+      , -- , ("infixR", testInfixR)
+        -- , ("someInfixR", testSomeInfixR)
+        -- , ("break", testBreak)
+        -- , ("someBreak", testSomeBreak)
+        -- , ("split", testSplit)
+        -- , ("split1", testSplit1)
+        -- , ("split2", testSplit2)
+        ("sepBy", testSepBy)
       , ("sepBy1", testSepBy1)
       , ("sepBy2", testSepBy2)
       ]
@@ -615,21 +615,22 @@ testSpan = testCase "span" $ do
   case parse p doc of
     Left e -> throwIO e
     Right s -> s @?= span 1 2
-  -- let v1 = calculateLineCol doc
-  -- lookupLineCol (-1) v1 @?= (0, 0)
-  -- lookupLineCol 0 v1 @?= (0, 0)
-  -- lookupLineCol 1 v1 @?= (0, 1)
-  -- lookupLineCol 2 v1 @?= (0, 2)
-  -- lookupLineCol 3 v1 @?= (0, 2)
-  -- let v2 = calculateLineCol "a\nbc\nd"
-  -- lookupLineCol (-1) v2 @?= (0, 0)
-  -- lookupLineCol 0 v2 @?= (0, 0)
-  -- lookupLineCol 1 v2 @?= (0, 1)
-  -- lookupLineCol 2 v2 @?= (1, 0)
-  -- lookupLineCol 3 v2 @?= (1, 1)
-  -- lookupLineCol 4 v2 @?= (1, 2)
-  -- lookupLineCol 5 v2 @?= (2, 0)
-  -- lookupLineCol 6 v2 @?= (2, 0)
+
+-- let v1 = calculateLineCol doc
+-- lookupLineCol (-1) v1 @?= (0, 0)
+-- lookupLineCol 0 v1 @?= (0, 0)
+-- lookupLineCol 1 v1 @?= (0, 1)
+-- lookupLineCol 2 v1 @?= (0, 2)
+-- lookupLineCol 3 v1 @?= (0, 2)
+-- let v2 = calculateLineCol "a\nbc\nd"
+-- lookupLineCol (-1) v2 @?= (0, 0)
+-- lookupLineCol 0 v2 @?= (0, 0)
+-- lookupLineCol 1 v2 @?= (0, 1)
+-- lookupLineCol 2 v2 @?= (1, 0)
+-- lookupLineCol 3 v2 @?= (1, 1)
+-- lookupLineCol 4 v2 @?= (1, 2)
+-- lookupLineCol 5 v2 @?= (2, 0)
+-- lookupLineCol 6 v2 @?= (2, 0)
 
 -- splitBindP :: Parser Void (Seq Char)
 -- splitBindP =
@@ -746,8 +747,8 @@ main =
       "Looksee"
       [ testBasic
       , testSpan
-      -- , testSplitBind
-      , testJson
+      , -- , testSplitBind
+        testJson
       , testSexp
       -- , testArith
       ]
