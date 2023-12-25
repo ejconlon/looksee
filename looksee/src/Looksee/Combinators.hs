@@ -1,4 +1,4 @@
-module Looksee.Extra
+module Looksee.Combinators
   ( betweenP
   , sepByP
   , sepBy1P
@@ -43,7 +43,19 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Data.Text qualified as T
-import Looksee.V2 (ParserT, charP, charP_, dropWhile1P, dropWhileP, headP, lengthP, optP, takeWhile1P, textP_, transP)
+import Looksee.Parser
+  ( ParserT
+  , charP
+  , charP_
+  , dropWhile1P
+  , dropWhileP
+  , headP
+  , lengthP
+  , optP
+  , takeWhile1P
+  , textP_
+  , transP
+  )
 
 -- | Parse with some local state
 scopeP :: (Monad m) => s -> ParserT e (StateT s m) a -> ParserT e m a

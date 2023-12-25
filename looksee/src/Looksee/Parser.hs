@@ -1,6 +1,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 
-module Looksee.V2
+module Looksee.Parser
   ( ParserT
   , Parser
   , parseT
@@ -58,7 +58,7 @@ import Data.Sequence qualified as Seq
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
-import Looksee.Base
+import Looksee.Types
   ( AltPhase (..)
   , Bounds (..)
   , Err (..)
@@ -346,7 +346,7 @@ mapElem onPure onErr = onElem
 lookP :: ParserT e m a -> ParserT e m a
 lookP (ParserT p0) = ParserT $ \k0 st0 ->
   let onPure a _ = ElemPure a st0
-      onErr e st = ElemErr (mkErr (ReasonLook e) st) st0
+      onErr e _ = ElemErr (mkErr (ReasonLook e) st0) st0
   in  p0 (k0 . mapElem onPure onErr) st0
 
 -- | Labels parse errors
@@ -355,7 +355,7 @@ labelP lab (ParserT p) = ParserT $ \k st ->
   p (k . mapElem ElemPure (mkElemErr . ReasonLabeled lab)) st
 
 -- | Expect the given text at the start of the range
-textP :: (Applicative m) => Text -> ParserT e m Text
+textP :: (Functor m) => Text -> ParserT e m Text
 textP expected = do
   actual <- takeP (T.length expected)
   if actual == expected
@@ -363,15 +363,15 @@ textP expected = do
     else errP (ReasonExpect expected actual)
 
 -- | Saves you from importing 'void'
-textP_ :: (Applicative m) => Text -> ParserT e m ()
+textP_ :: (Functor m) => Text -> ParserT e m ()
 textP_ = void . textP
 
 -- | Expect the given character at the start of the range
-charP :: (Applicative m) => Char -> ParserT e m Char
+charP :: (Functor m) => Char -> ParserT e m Char
 charP = fmap T.head . textP . T.singleton
 
 -- | Saves you from importing 'void'
-charP_ :: (Applicative m) => Char -> ParserT e m ()
+charP_ :: (Functor m) => Char -> ParserT e m ()
 charP_ = void . charP
 
 -- private
@@ -393,7 +393,7 @@ retrying onTrunc onMore = retMore
               Just el -> el
 
 -- | Take the given number of characters from the start of the range, or fewer if empty
-takeP :: (Applicative m) => Int -> ParserT e m Text
+takeP :: (Functor m) => Int -> ParserT e m Text
 takeP len = ret
  where
   ret =
@@ -401,12 +401,12 @@ takeP len = ret
       then pure T.empty
       else retrying onTrunc onMore
   onTrunc !st =
-    let (txt, buf') = TL.splitAt (fromIntegral len) (stBuf st)
-        txt' = TL.toStrict txt
+    let (ltxt, buf') = TL.splitAt (fromIntegral len) (stBuf st)
+        txt = TL.toStrict ltxt
         bounds@(Bounds start _) = stBounds st
-        bounds' = bounds {boundsStart = foldPoint txt' start}
+        bounds' = bounds {boundsStart = foldPoint txt start}
         st' = st {stBuf = buf', stBounds = bounds'}
-    in  ElemPure txt' st'
+    in  ElemPure txt st'
   onMore st =
     let need = len - fromIntegral (TL.length (stBuf st))
     in  if need > 0
@@ -415,7 +415,7 @@ takeP len = ret
 
 -- | Take exactly the given number of characters from the start of the range,
 -- throwing error if insufficient input
-takeExactP :: (Applicative m) => Int -> ParserT e m Text
+takeExactP :: (Functor m) => Int -> ParserT e m Text
 takeExactP len = ret
  where
   ret =
@@ -427,12 +427,12 @@ takeExactP len = ret
     in  if len - have > 0
           then mkElemErr (ReasonDemand len have) st
           else
-            let (txt, buf') = TL.splitAt (fromIntegral len) (stBuf st)
-                txt' = TL.toStrict txt
+            let (ltxt, buf') = TL.splitAt (fromIntegral len) (stBuf st)
+                txt = TL.toStrict ltxt
                 bounds@(Bounds start _) = stBounds st
-                bounds' = bounds {boundsStart = foldPoint txt' start}
+                bounds' = bounds {boundsStart = foldPoint txt start}
                 st' = st {stBuf = buf', stBounds = bounds'}
-            in  ElemPure txt' st'
+            in  ElemPure txt st'
   onMore st =
     let need = len - fromIntegral (TL.length (stBuf st))
     in  if need > 0
@@ -441,52 +441,80 @@ takeExactP len = ret
 
 -- | Takes exactly 1 character from the start of the range, throwing error
 -- if at end of input
-headP :: (Applicative m) => ParserT e m Char
+headP :: (Functor m) => ParserT e m Char
 headP = fmap T.head (takeExactP 1)
 
 -- | Takes exactly 1 character from the start of the range, returning Nothing
 -- if at end of input
-unconsP :: (Applicative m) => ParserT e m (Maybe Char)
+unconsP :: (Functor m) => ParserT e m (Maybe Char)
 unconsP = fmap (fmap fst . T.uncons) (takeP 1)
 
 -- | Drop the given number of characters from the start of the range, or fewer if empty
-dropP :: (Applicative m) => Int -> ParserT e m Int
+dropP :: (Functor m) => Int -> ParserT e m Int
 dropP = fmap T.length . takeP
 
 -- | Drop exactly the given number of characters from the start of the range, or error
-dropExactP :: (Applicative m) => Int -> ParserT e m ()
+dropExactP :: (Functor m) => Int -> ParserT e m ()
 dropExactP = void . takeExactP
 
 -- | Take characters from the start of the range satisfying the predicate
-takeWhileP :: (Applicative m) => (Char -> Bool) -> ParserT e m Text
-takeWhileP _f = error "TODO"
+takeWhileP :: (Functor m) => (Char -> Bool) -> ParserT e m Text
+takeWhileP _f = pure T.empty -- error "TODO"
 
 -- | Like 'takeWhileP' but ensures at least 1 character has been taken
-takeWhile1P :: (Applicative m) => (Char -> Bool) -> ParserT e m Text
-takeWhile1P _f = error "TODO"
+takeWhile1P :: (Functor m) => (Char -> Bool) -> ParserT e m Text
+takeWhile1P f = do
+  txt <- takeWhileP f
+  if T.null txt
+    then errP (ReasonDemand 1 0)
+    else pure txt
 
 -- | Drop characters from the start of the range satisfying the predicate
-dropWhileP :: (Applicative m) => (Char -> Bool) -> ParserT e m Int
+dropWhileP :: (Functor m) => (Char -> Bool) -> ParserT e m Int
 dropWhileP = fmap T.length . takeWhileP
 
 -- | Like 'dropWhileP' but ensures at least 1 character has been dropped
-dropWhile1P :: (Applicative m) => (Char -> Bool) -> ParserT e m Int
+dropWhile1P :: (Functor m) => (Char -> Bool) -> ParserT e m Int
 dropWhile1P = fmap T.length . takeWhile1P
 
+finalizing
+  :: (St -> Elem e m a (ParserT e m a)) -> ParserT e m a
+finalizing onTrunc = retMore
+ where
+  retTrunc = ParserT (. onTrunc)
+  retMore = ParserT $ \k st ->
+    k $
+      let Bounds _ mayEnd = stBounds st
+      in  case mayEnd of
+            Just _ -> onTrunc st
+            Nothing ->
+              ElemCont
+                (Susp retTrunc st)
+                (Susp retMore . bufAddSt st)
+
 -- | Take the remaining range, leaving it empty
-takeAllP :: (Applicative m) => ParserT e m Text
-takeAllP = error "TODO"
+takeAllP :: ParserT e m Text
+takeAllP = finalizing $ \st ->
+  let txt = TL.toStrict (stBuf st)
+      bounds@(Bounds start _) = stBounds st
+      bounds' = bounds {boundsStart = foldPoint txt start}
+      st' = st {stBuf = TL.empty, stBounds = bounds'}
+  in  ElemPure txt st'
 
 -- | Like 'takeAllP' but ensures at least 1 character has been taken
-takeAll1P :: (Applicative m) => ParserT e m Text
-takeAll1P = error "TODO"
+takeAll1P :: (Functor m) => ParserT e m Text
+takeAll1P = do
+  txt <- takeAllP
+  if T.null txt
+    then errP (ReasonDemand 1 0)
+    else pure txt
 
 -- | Drop the remaining range, leaving it empty
-dropAllP :: (Applicative m) => ParserT e m Int
+dropAllP :: (Functor m) => ParserT e m Int
 dropAllP = fmap T.length takeAllP
 
 -- | Like 'dropAllP' but ensures at least 1 character has been dropped
-dropAll1P :: (Applicative m) => ParserT e m Int
+dropAll1P :: (Functor m) => ParserT e m Int
 dropAll1P = fmap T.length takeAll1P
 
 -- | Unwrap a monad transformer layer (see 'scopeP' for use)

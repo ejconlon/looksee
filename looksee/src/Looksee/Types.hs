@@ -1,6 +1,6 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Looksee.Base where
+module Looksee.Types where
 
 import Control.Exception (Exception)
 import Data.Bifoldable (Bifoldable (..))

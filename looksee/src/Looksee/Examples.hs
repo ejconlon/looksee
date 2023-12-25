@@ -5,7 +5,7 @@ module Looksee.Examples
   ( Json (..)
   , jsonParser
   , Arith (..)
-  , arithParser
+  -- , arithParser
   , Atom (..)
   , Sexp (..)
   , sexpParser
@@ -22,9 +22,9 @@ import Looksee
   ( Parser
   , altP
   , betweenP
-  , decP
+  -- , decP
   , doubleStrP
-  , infixRP
+  -- , infixRP
   , intP
   , labelP
   , sciP
@@ -32,7 +32,7 @@ import Looksee
   , space1P
   , stripEndP
   , stripP
-  , stripStartP
+  -- , stripStartP
   , takeWhile1P
   , textP_
   )
@@ -82,24 +82,24 @@ data Arith
   | ArithSub Arith Arith
   deriving stock (Eq, Ord, Show)
 
--- | A parser for arithmetic expressions
-arithParser :: Parser Void Arith
-arithParser = stripP rootP
- where
-  identP = takeWhile1P isAlpha
-  binaryP op f = fmap (uncurry f) (infixRP op (stripEndP rootP) (stripStartP rootP))
-  unaryP op f = textP_ op *> fmap f rootP
-  rootP =
-    altP
-      [ labelP "add" (binaryP "+" ArithAdd)
-      , labelP "sub" (binaryP "-" ArithSub)
-      , labelP "mul" (binaryP "*" ArithMul)
-      , labelP "neg" (unaryP "-" ArithNeg)
-      , labelP "paren" (betweenP (stripEndP (textP_ "(")) (textP_ ")") (stripEndP rootP))
-      , labelP "num" (ArithNum <$> decP)
-      , labelP "var" (ArithVar <$> identP)
-      ]
-
+-- -- | A parser for arithmetic expressions
+-- arithParser :: Parser Void Arith
+-- arithParser = stripP rootP
+--  where
+--   identP = takeWhile1P isAlpha
+--   binaryP op f = fmap (uncurry f) (infixRP op (stripEndP rootP) (stripStartP rootP))
+--   unaryP op f = textP_ op *> fmap f rootP
+--   rootP =
+--     altP
+--       [ labelP "add" (binaryP "+" ArithAdd)
+--       , labelP "sub" (binaryP "-" ArithSub)
+--       , labelP "mul" (binaryP "*" ArithMul)
+--       , labelP "neg" (unaryP "-" ArithNeg)
+--       , labelP "paren" (betweenP (stripEndP (textP_ "(")) (textP_ ")") (stripEndP rootP))
+--       , labelP "num" (ArithNum <$> decP)
+--       , labelP "var" (ArithVar <$> identP)
+--       ]
+--
 -- | Leaves of S-expression trees
 data Atom
   = AtomIdent !Text

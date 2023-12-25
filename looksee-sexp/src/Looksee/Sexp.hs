@@ -11,7 +11,6 @@ module Looksee.Sexp
   , SexpType (..)
   , sexpList
   , IsSexp (..)
-  , OffsetSpan
   , LocSexp
   , sexpParser
   )
@@ -160,17 +159,7 @@ instance IsSexp Symbol where
 sexpList :: Brace -> [Sexp] -> Sexp
 sexpList b = Sexp . SexpListF b . Seq.fromList
 
-type OffsetSpan = Span Int
-
-type LocSexp = Memo SexpF OffsetSpan
-
--- TODO put something like this in looksee
-offsetP :: (Monad m) => ParserT e m a -> ParserT e m (Anno OffsetSpan a)
-offsetP p = do
-  Span start _ <- L.spanP
-  a <- p
-  Span end _ <- L.spanP
-  pure (Anno (Span start end) a)
+type LocSexp = Memo SexpF Span
 
 identStartPred :: Char -> Bool
 identStartPred c = not (isDigit c) && identContPred c
@@ -234,7 +223,7 @@ sexpParser = L.stripP rootP
     pure (SexpListF b ss)
   rootP =
     fmap (Memo . MemoF) $
-      offsetP $
+      spanP $
         L.altP
           [ L.labelP "atom" (SexpAtomF <$> atomP)
           , L.labelP "list" listP

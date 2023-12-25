@@ -28,10 +28,10 @@ source-repository head
 library
   exposed-modules:
       Looksee
-      Looksee.Base
+      Looksee.Combinators
       Looksee.Examples
-      Looksee.Extra
-      Looksee.V2
+      Looksee.Parser
+      Looksee.Types
   other-modules:
       Paths_looksee
   hs-source-dirs:
