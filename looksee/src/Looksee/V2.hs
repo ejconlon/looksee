@@ -322,24 +322,15 @@ subAltP
   -> Seq (AltPhase, Err e)
   -> [ParserT e m a]
   -> m r
-subAltP = undefined
-
--- subAltP k0 st0 = onLoop where
---   onLoop !errs = \case
---     [] -> k0 (mkElemErr (if Seq.null errs then ReasonEmpty else ReasonAlt errs) st0)
---     p : rest -> onParser errs p rest
---   onParser errs (ParserT p) rest = p (onElem errs rest) st0
---   onElem errs rest = \case
---     ElemPure _ _ -> undefined
---     ElemErr e _ -> onLoop (errs :|> (AltPhaseBranch, e)) rest
---     ElemCont _ _ -> undefined
-
---      Left e -> put st0 >> go (errs :|> (AltPhaseBranch, e)) rest
---      Right r -> do
---        es <- tryT (j (Right r))
---        case es of
---          Left e -> put st0 >> go (errs :|> (AltPhaseCont, e)) rest
---          Right s -> pure s
+subAltP k0 st0 = onLoop where
+  onLoop !errs = \case
+    [] -> k0 (mkElemErr (if Seq.null errs then ReasonEmpty else ReasonAlt errs) st0)
+    p : rest -> onParser errs p rest
+  onParser errs (ParserT p) rest = p (onElem errs rest) st0
+  onElem errs rest = \case
+    ElemPure _ _ -> undefined
+    ElemErr e _ -> onLoop (errs :|> (AltPhaseBranch, e)) rest
+    ElemCont _ _ -> undefined
 
 -- | Parse with many possible branches
 altP :: (Applicative m) => [ParserT e m a] -> ParserT e m a
