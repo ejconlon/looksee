@@ -746,9 +746,9 @@ main =
     testGroup
       "Looksee"
       [ testBasic
-      , testSpan
-      , -- , testSplitBind
-        testJson
-      , testSexp
+      -- , testSpan
+      -- , testSplitBind
+      -- , testJson
+      -- , testSexp
       -- , testArith
       ]

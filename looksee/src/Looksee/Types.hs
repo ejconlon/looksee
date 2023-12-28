@@ -12,6 +12,7 @@ import Data.Sequence (Seq)
 import Data.String (IsString)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
 import Data.Typeable (Typeable)
 
 data Point = Point
@@ -34,6 +35,9 @@ nextPoint x (Point o l c) =
 foldPoint :: Text -> Point -> Point
 foldPoint t p = T.foldl' (flip nextPoint) p t
 
+foldPointLazy :: TL.Text -> Point -> Point
+foldPointLazy t p = TL.foldl' (flip nextPoint) p t
+
 data Span = Span {spanStart :: !Point, spanEnd :: !Point}
   deriving stock (Eq, Ord, Show)
 
@@ -51,6 +55,9 @@ textBounds t = Bounds initPoint (Just (T.length t))
 -- | Increment the start point of the bounds
 foldBounds :: Text -> Bounds -> Bounds
 foldBounds t (Bounds s me) = Bounds (foldPoint t s) me
+
+foldBoundsLazy :: TL.Text -> Bounds -> Bounds
+foldBoundsLazy t (Bounds s me) = Bounds (foldPointLazy t s) me
 
 -- | A parser label (for error reporting)
 newtype Label = Label {unLabel :: Text}
