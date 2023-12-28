@@ -18,10 +18,8 @@ module Looksee.Parser
   , repeat1P
   , lookP
   , labelP
-  , textP
-  , textP_
-  , charP
-  , charP_
+  , transP
+  , scopeP
   , headP
   , unconsP
   , takeP
@@ -36,35 +34,38 @@ module Looksee.Parser
   , dropAllP
   , takeAll1P
   , dropAll1P
-  , transP
+  , textP
+  , textP_
+  , charP
+  , charP_
   , breakP
-  , someBreakP
-  , splitP
-  , split1P
-  , split2P
-  , leadP
-  , lead1P
-  , trailP
-  , trail1P
-  , infixRP
-  , someInfixRP
+  -- , someBreakP
+  -- , splitP
+  -- , split1P
+  -- , split2P
+  -- , leadP
+  -- , lead1P
+  -- , trailP
+  -- , trail1P
+  -- , infixRP
+  -- , someInfixRP
   )
 where
 
 import Control.Applicative (Alternative (..))
 import Control.Foldl (FoldM (..))
-import Control.Monad (ap, void)
+import Control.Monad (ap, void, when)
 import Control.Monad.Except (Except, ExceptT, MonadError (..), runExceptT)
 import Control.Monad.IO.Class (MonadIO (..))
 import Control.Monad.Morph (hoist)
 import Control.Monad.Reader (MonadReader (..))
-import Control.Monad.State.Strict (MonadState (..))
+import Control.Monad.State.Strict (MonadState (..), StateT, modify', evalStateT, gets)
 import Control.Monad.Trans (MonadTrans (..))
 import Data.Bifunctor (Bifunctor (..))
 import Data.Foldable (toList)
 import Data.Functor.Identity (Identity (..))
 import Data.Kind (Type)
-import Data.Maybe (maybeToList)
+import Data.Maybe (isNothing)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
@@ -81,10 +82,10 @@ import Looksee.Types
   , Reason (..)
   , Span (..)
   , foldBounds
-  , foldBoundsLazy
   , initBounds
   , textBounds
   )
+import GHC.Float (double2Float)
 
 -- private
 data St = St
@@ -312,27 +313,22 @@ optP (ParserT p) = ParserT $ \k st -> flip p st $ \case
 emptyP :: ParserT e m a
 emptyP = errP ReasonEmpty
 
--- private
-subAltP
-  :: (Monad m)
-  => (ElemP e m a -> T e m r)
-  -> St
-  -> Seq (AltPhase, Err e)
-  -> [ParserT e m a]
-  -> T e m r
-subAltP k0 st0 = onLoop
- where
-  onLoop !errs = \case
-    [] -> k0 (mkElemErr (if Seq.null errs then ReasonEmpty else ReasonAlt errs) st0)
-    p : rest -> onParser errs rest p
-  onParser errs rest (ParserT p) = p (onElem errs rest) st0
-  onElem errs rest = \case
-    ElemErr e _ -> onLoop (errs :|> (AltPhaseBranch, e)) rest
-    el -> catchError (k0 el) (\e -> onLoop (errs :|> (AltPhaseCont, e)) rest)
+-- | parse
+catchP :: (Monad m) => ParserT e m a -> (AltPhase -> Err e -> ParserT e m a) -> ParserT e m a
+catchP p0 f = go p0 where
+  go (ParserT p) = ParserT $ \k st -> do
+    el <- p pure st
+    case el of
+      ElemPure _ _ -> catchError (k el) (\e -> let ParserT q = f AltPhaseCont e in q k st)
+      ElemErr e _ -> let ParserT q = f AltPhaseBranch e in q k st
+      ElemCont jz jt -> k (ElemCont (fmap go jz) (fmap go . jt))
 
 -- | Parse with many possible branches
 altP :: (Monad m) => [ParserT e m a] -> ParserT e m a
-altP ps = ParserT (\k0 st0 -> subAltP k0 st0 Empty ps)
+altP = go Empty where
+  go !errs = \case
+    [] -> errP (if Seq.null errs then ReasonEmpty else ReasonAlt errs)
+    p : ps -> catchP p (\phase err -> go (errs :|> (phase, err)) ps)
 
 -- private
 repeatTailP :: (Monad m) => ParserT e m a -> Seq a -> ParserT e m (Seq a)
@@ -379,147 +375,112 @@ labelP :: Label -> ParserT e m a -> ParserT e m a
 labelP lab (ParserT p) = ParserT $ \k st ->
   p (k . mapElem ElemPure (mkElemErr . ReasonLabeled lab)) st
 
--- | Expect the given text at the start of the range
-textP :: (Functor m) => Text -> ParserT e m Text
-textP expected = do
-  actual <- takeP (T.length expected)
-  if actual == expected
-    then pure expected
-    else errP (ReasonExpect expected actual)
+-- | Unwrap a monad transformer layer (see 'scopeP' for use)
+transP :: (MonadTrans t, Monad m) => (forall a. t m a -> m a) -> ParserT e (t m) b -> ParserT e m b
+transP nat = onParser
+ where
+  onParser (ParserT p) = ParserT (\k st -> hoist nat (p (hoist lift . k . onElem) st))
+  onElem = \case
+    ElemPure a st -> ElemPure a st
+    ElemErr e st -> ElemErr e st
+    ElemCont jz jt -> ElemCont (onSusp jz) (onSusp . jt)
+  onSusp = fmap onParser
 
--- | Saves you from importing 'void'
-textP_ :: (Functor m) => Text -> ParserT e m ()
-textP_ = void . textP
-
--- | Expect the given character at the start of the range
-charP :: (Functor m) => Char -> ParserT e m Char
-charP = fmap T.head . textP . T.singleton
-
--- | Saves you from importing 'void'
-charP_ :: (Functor m) => Char -> ParserT e m ()
-charP_ = void . charP
+-- | Parse with some local state
+scopeP :: (Monad m) => s -> ParserT e (StateT s m) a -> ParserT e m a
+scopeP s0 = transP (`evalStateT` s0)
 
 -- private
-retrying
-  :: (St -> ElemP e m a) -> (St -> Maybe (ElemP e m a)) -> ParserT e m a
-retrying onTrunc onMore = retMore
- where
-  retTrunc = ParserT (. onTrunc)
-  retMore = ParserT $ \k st ->
-    k $
-      let Bounds _ mayEnd = stBounds st
-      in  case mayEnd of
-            Just _ -> onTrunc st
-            Nothing -> case onMore st of
-              Nothing ->
-                ElemCont
-                  (Susp retTrunc st)
-                  (Susp retMore . bufAddSt st)
-              Just el -> el
+waitingP :: ParserT e m Bool
+waitingP = getsP (isNothing . boundsEndOffset . stBounds)
+
+-- private
+loopP :: Functor m => ParserT e m Bool -> ParserT e m ()
+loopP p = go where
+  go = do
+    continue <- p
+    when continue $ do
+      waiting <- waitingP
+      when waiting go
+
+-- -- private
+-- loopP :: Functor m => ParserT e m (Maybe a) -> ParserT e m (Maybe a)
+-- loopP p = go where
+--   go = do
+--     ma <- p
+--     case ma of
+--       Nothing -> do
+--         waiting <- waitingP
+--         if waiting
+--           then go
+--           else pure Nothing
+--       Just _ -> pure ma
+
+data TakeS = TakeS !Int !TLB.Builder
 
 -- | Take the given number of characters from the start of the range, or fewer if empty
-takeP :: (Functor m) => Int -> ParserT e m Text
-takeP len = ret
- where
-  ret =
-    if len <= 0
-      then pure T.empty
-      else retrying onTrunc onMore
-  onTrunc !st =
-    let (txt, st') = bufStateSt (TL.splitAt (fromIntegral len)) st
-    in  ElemPure txt st'
-  onMore st =
-    let need = len - fromIntegral (TL.length (stBuf st))
-    in  if need > 0
-          then Nothing
-          else Just (onTrunc st)
+takeP :: (Monad m) => Int -> ParserT e m Text
+takeP n0 = scopeP (TakeS n0 mempty) $ do
+  loopP $ do
+    TakeS n b <- get
+    t <- stateP (bufStateSt (TL.splitAt (fromIntegral n)))
+    let n' = n - T.length t
+        b' = b <> TLB.fromText t
+    put (TakeS n' b')
+    pure (n' > 0)
+  gets (\(TakeS _ b) -> TL.toStrict (TLB.toLazyText b))
 
 -- | Take exactly the given number of characters from the start of the range,
 -- throwing error if insufficient input
-takeExactP :: (Functor m) => Int -> ParserT e m Text
-takeExactP len = ret
- where
-  ret =
-    if len <= 0
-      then pure T.empty
-      else retrying onTrunc onMore
-  onTrunc !st =
-    let have = fromIntegral (TL.length (stBuf st))
-    in  if len - have > 0
-          then mkElemErr (ReasonDemand len have) st
-          else
-            let (txt, st') = bufStateSt (TL.splitAt (fromIntegral len)) st
-            in  ElemPure txt st'
-  onMore st =
-    let need = len - fromIntegral (TL.length (stBuf st))
-    in  if need > 0
-          then Nothing
-          else Just (onTrunc st)
+takeExactP :: (Monad m) => Int -> ParserT e m Text
+takeExactP n0 = do
+  t <- takeP n0
+  let l = T.length t
+  if l == n0
+    then pure t
+    else errP (ReasonDemand n0 l)
 
 -- | Takes exactly 1 character from the start of the range, throwing error
 -- if at end of input
-headP :: (Functor m) => ParserT e m Char
+headP :: (Monad m) => ParserT e m Char
 headP = fmap T.head (takeExactP 1)
 
 -- | Takes exactly 1 character from the start of the range, returning Nothing
 -- if at end of input
-unconsP :: (Functor m) => ParserT e m (Maybe Char)
+unconsP :: (Monad m) => ParserT e m (Maybe Char)
 unconsP = fmap (fmap fst . T.uncons) (takeP 1)
 
 -- | Drop the given number of characters from the start of the range, or fewer if empty
-dropP :: (Functor m) => Int -> ParserT e m Int
+dropP :: (Monad m) => Int -> ParserT e m Int
 dropP = fmap T.length . takeP
 
 -- | Drop exactly the given number of characters from the start of the range, or error
-dropExactP :: (Functor m) => Int -> ParserT e m ()
+dropExactP :: (Monad m) => Int -> ParserT e m ()
 dropExactP = void . takeExactP
 
--- private
-retryingWith
-  :: (s -> St -> ElemP e m a)
-  -> (s -> St -> Maybe (ElemP e m a))
-  -> s
-  -> ParserT e m a
-retryingWith onTrunc onMore = retMore
- where
-  retTrunc s = ParserT (. onTrunc s)
-  retMore s = ParserT $ \k st ->
-    k $
-      let Bounds _ mayEnd = stBounds st
-      in  case mayEnd of
-            Just _ -> onTrunc s st
-            Nothing -> case onMore s st of
-              Nothing ->
-                ElemCont
-                  (Susp (retTrunc s) st)
-                  (Susp (retMore s) . bufAddSt st)
-              Just el -> el
-
 -- | Take characters from the start of the range satisfying the predicate
-takeWhileP :: (Char -> Bool) -> ParserT e m Text
-takeWhileP f = retryingWith onTrunc onMore mempty
- where
-  onTrunc s st =
-    let (match, st') = bufStateSt (TL.span f) st
-        s' = s <> TLB.fromText match
-        res = TL.toStrict (TLB.toLazyText s')
-    in  ElemPure res st'
-  onMore _s _st = error "TODO"
+takeWhileP :: Monad m => (Char -> Bool) -> ParserT e m Text
+takeWhileP f = scopeP mempty $ do
+  loopP $ do
+    x <- stateP (bufStateSt (TL.span f))
+    modify' (<> TLB.fromText x)
+    getsP (TL.null . stBuf)
+  gets (TL.toStrict . TLB.toLazyText)
 
 -- | Like 'takeWhileP' but ensures at least 1 character has been taken
-takeWhile1P :: (Functor m) => (Char -> Bool) -> ParserT e m Text
+takeWhile1P :: (Monad m) => (Char -> Bool) -> ParserT e m Text
 takeWhile1P f = do
   txt <- takeWhileP f
   if T.null txt
-    then errP (ReasonDemand 1 0)
+    then errP ReasonTakeNone
     else pure txt
 
 -- | Drop characters from the start of the range satisfying the predicate
-dropWhileP :: (Functor m) => (Char -> Bool) -> ParserT e m Int
+dropWhileP :: (Monad m) => (Char -> Bool) -> ParserT e m Int
 dropWhileP = fmap T.length . takeWhileP
 
 -- | Like 'dropWhileP' but ensures at least 1 character has been dropped
-dropWhile1P :: (Functor m) => (Char -> Bool) -> ParserT e m Int
+dropWhile1P :: (Monad m) => (Char -> Bool) -> ParserT e m Int
 dropWhile1P = fmap T.length . takeWhile1P
 
 finalizing
@@ -559,183 +520,239 @@ dropAllP = fmap T.length takeAllP
 dropAll1P :: (Functor m) => ParserT e m Int
 dropAll1P = fmap T.length takeAll1P
 
--- | Unwrap a monad transformer layer (see 'scopeP' for use)
-transP :: (MonadTrans t, Monad m) => (forall a. t m a -> m a) -> ParserT e (t m) b -> ParserT e m b
-transP nat = onParser
- where
-  onParser (ParserT p) = ParserT (\k st -> hoist nat (p (hoist lift . k . onElem) st))
-  onElem = \case
-    ElemPure a st -> ElemPure a st
-    ElemErr e st -> ElemErr e st
-    ElemCont jz jt -> ElemCont (onSusp jz) (onSusp . jt)
-  onSusp = fmap onParser
+-- | Expect the given text at the start of the range
+textP :: (Monad m) => Text -> ParserT e m Text
+textP expected = do
+  actual <- takeP (T.length expected)
+  if actual == expected
+    then pure expected
+    else errP (ReasonExpect expected actual)
 
--- private
-handleBreak :: TL.Text -> St -> TL.Text -> TL.Text -> (St, St, St)
-handleBreak needle (St hay bounds@(Bounds start _) labs) hayA rest =
-  let hayX = TL.drop (TL.length hayA) hay
-      hayB = TL.drop (TL.length needle) rest
-      aLen = fromIntegral (TL.length hayA)
-      endA = pointOffset start + aLen
-      rngA = Bounds start (Just endA)
-      rngX = foldBoundsLazy hayA bounds
-      rngB = foldBoundsLazy needle rngX
-      stA = St hayA rngA labs
-      stX = St hayX rngX labs
-      stB = St hayB rngB labs
-  in  (stA, stX, stB)
+-- | Saves you from importing 'void'
+textP_ :: (Monad m) => Text -> ParserT e m ()
+textP_ = void . textP
 
--- Returns first possible break point with positions
--- (startStream, breakPt) (breakPt, endStream) (breakPt + needLen, endStream)
-breakRP :: TL.Text -> St -> Maybe (St, St, St)
-breakRP needle st@(St hay _ _) =
-  let (hayA, rest) = TL.breakOn needle hay
-  in  if TL.null rest
-        then Nothing
-        else Just (handleBreak needle st hayA rest)
+-- | Expect the given character at the start of the range
+charP :: (Monad m) => Char -> ParserT e m Char
+charP = fmap T.head . textP . T.singleton
 
--- Returns list of possible break points with positions
--- (startStream, breakPt) (breakPt, endStream) (breakPt + needLen, endStream)
-breakAllRP :: TL.Text -> St -> [(St, St, St)]
-breakAllRP needle st@(St hay _ _) =
-  fmap (uncurry (handleBreak needle st)) (TL.breakOnAll needle hay)
+-- | Saves you from importing 'void'
+charP_ :: (Monad m) => Char -> ParserT e m ()
+charP_ = void . charP
+
+-- -- private
+-- handleBreak :: TL.Text -> St -> TL.Text -> TL.Text -> (St, St, St)
+-- handleBreak needle (St hay bounds@(Bounds start _) labs) hayA rest =
+--   let hayX = TL.drop (TL.length hayA) hay
+--       hayB = TL.drop (TL.length needle) rest
+--       aLen = fromIntegral (TL.length hayA)
+--       endA = pointOffset start + aLen
+--       rngA = Bounds start (Just endA)
+--       rngX = foldBoundsLazy hayA bounds
+--       rngB = foldBoundsLazy needle rngX
+--       stA = St hayA rngA labs
+--       stX = St hayX rngX labs
+--       stB = St hayB rngB labs
+--   in  (stA, stX, stB)
+--
+-- -- Returns first possible break point with positions
+-- -- (startStream, breakPt) (breakPt, endStream) (breakPt + needLen, endStream)
+-- breakRP :: TL.Text -> St -> Maybe (St, St, St)
+-- breakRP needle st@(St hay _ _) =
+--   let (hayA, rest) = TL.breakOn needle hay
+--   in  if TL.null rest
+--         then Nothing
+--         else Just (handleBreak needle st hayA rest)
+--
+-- -- Returns list of possible break points with positions
+-- -- (startStream, breakPt) (breakPt, endStream) (breakPt + needLen, endStream)
+-- breakAllRP :: TL.Text -> St -> [(St, St, St)]
+-- breakAllRP needle st@(St hay _ _) =
+--   fmap (uncurry (handleBreak needle st)) (TL.breakOnAll needle hay)
+--
+-- -- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
+-- -- Chooses first split from START to END of range (see 'infixRP').
+-- breakP :: (Monad m) => Text -> ParserT e m a -> ParserT e m a
+-- breakP tx pa = fmap fst (infixRP tx pa (pure ()))
+
+data BreakS = BreakS !Int !TLB.Builder !(Maybe (St, St))
 
 -- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
 -- Chooses first split from START to END of range (see 'infixRP').
 breakP :: (Monad m) => Text -> ParserT e m a -> ParserT e m a
-breakP tx pa = fmap fst (infixRP tx pa (pure ()))
+breakP tx p = do
+  let txLazy = TL.fromStrict tx
+      txLen = fromIntegral (T.length tx)
+  St _ (Bounds start0 _) labs <- getP
+  msts <- scopeP (BreakS 0 mempty Nothing) $ do
+    loopP $ do
+      (pre, post) <- getsP (TL.breakOn txLazy . stBuf)
+      if TL.null post
+        then do
+          bpre <- stateP (bufStateSt (\buf -> TL.splitAt (TL.length buf - txLen + 1) buf))
+          modify' (\(BreakS s b _) -> BreakS (s + T.length bpre) (b <> TLB.fromText bpre) Nothing)
+          pure True
+        else do
+          stB <- getsP (snd . bufStateSt (TL.splitAt txLen))
+          modify' $ \(BreakS s b _) ->
+            let s' = s + fromIntegral (TL.length pre)
+                b' = b <> TLB.fromLazyText pre
+                bufA = TLB.toLazyText b'
+                boundsA = Bounds start0 (Just s)
+                stA = St bufA boundsA labs
+            in BreakS s' b' (Just (stA, stB))
+          pure False
+    gets (\(BreakS _ _ msts) -> msts)
+  case msts of
+    Nothing -> undefined -- not found error
+    Just (stA, stB) -> ParserT $ \k _ -> do
+      -- eh something here
+      a <- finishParseT (p <* endP) stA
+      k (ElemPure a stB)
 
--- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
--- Chooses splits from START to END of range (see 'someInfixRP').
-someBreakP :: (Monad m) => Text -> ParserT e m a -> ParserT e m a
-someBreakP tx pa = fmap fst (someInfixRP tx pa (pure ()))
+    --   (pre, post) <- getsP (TL.breakOn txLazy . stBuf)
+    --   if TL.null post
+    --     then do
+    --       bpre <- stateP (bufStateSt (\buf -> TL.splitAt (TL.length buf - txLen + 1) buf))
+    --       modify' (\(BreakS b ma) -> BreakS (b <> TLB.fromText bpre) ma)
+    --       pure True
+    --     else do
+    --       bpre <- state $ \(BreakS b ma) ->
+    --         let b' = b <> TLB.fromLazyText pre
+    --         in (TLB.toLazyText b', BreakS b' ma)
+    --       st' =
+    -- undefined
 
--- private
-splitTailP :: (Monad m) => Text -> ParserT e m a -> Seq a -> St -> ParserT e m (Seq a)
-splitTailP tx pa = go
- where
-  go !acc !st = do
-    mz <- optInfixRP tx pa (pure ())
-    case mz of
-      Nothing -> optP pa >>= maybe (acc <$ putP st) (pure . (acc :|>))
-      Just (a, st', _) -> go (acc :|> a) st'
-
--- | Split on the delimiter, parsing segments with a narrowed range, until parsing fails.
--- Returns the sequence of successes with state at the delimiter preceding the failure (or end of input),
--- Note that this will always succeed, sometimes consuming no input and yielding empty results.
-splitP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-splitP tx pa = getP >>= splitTailP tx pa Empty
-
--- | Like 'splitP' but ensures the sequence is at least length 1.
-split1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-split1P tx pa = do
-  mz <- optInfixRP tx pa (pure ())
-  case mz of
-    Nothing -> fmap Seq.singleton pa
-    Just (a, st', _) -> splitTailP tx pa (Seq.singleton a) st'
-
--- | Like 'splitP' but ensures the sequence is at least length 2.
--- (This ensures there is at least one delimiter included.)
-split2P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-split2P tx pa = do
-  a0 <- someBreakP tx pa
-  mz <- optInfixRP tx pa (pure ())
-  case mz of
-    Nothing -> fmap (Empty :|> a0 :|>) pa
-    Just (a1, st', _) -> splitTailP tx pa (Empty :|> a0 :|> a1) st'
-
--- | Like 'splitP' but ensures a leading delimiter
-leadP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-leadP tx pa = do
-  mu <- optP (textP tx)
-  case mu of
-    Nothing -> pure Empty
-    Just _ -> split1P tx pa
-
--- | Like 'split1P' but ensures a leading delimiter
-lead1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-lead1P tx pa = textP tx >> split1P tx pa
-
--- | Like 'splitP' but ensures a trailing delimiter
-trailP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-trailP tx pa = do
-  as <- splitP tx pa
-  case as of
-    Empty -> pure Empty
-    _ -> as <$ textP tx
-
--- | Like 'split1P' but ensures a trailing delimiter
-trail1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-trail1P tx pa = split1P tx pa <* textP tx
-
--- private
-subInfixP
-  :: (Monad m)
-  => St
-  -> ParserT e m a
-  -> ParserT e m b
-  -> (ElemP e m (Maybe (a, St, b)) -> T e m r)
-  -> [(St, St, St)]
-  -> T e m r
-subInfixP = undefined
-
--- subInfixP st0 pa pb j = go Empty
+-- -- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
+-- -- Chooses splits from START to END of range (see 'someInfixRP').
+-- someBreakP :: (Monad m) => Text -> ParserT e m a -> ParserT e m a
+-- someBreakP tx pa = fmap fst (someInfixRP tx pa (pure ()))
+--
+-- -- private
+-- splitTailP :: (Monad m) => Text -> ParserT e m a -> Seq a -> St -> ParserT e m (Seq a)
+-- splitTailP tx pa = go
 --  where
---   go !errs = \case
---     [] -> do
---       put st0
---       case errs of
---         Empty -> j (Right Nothing)
---         _ -> mkErrT (ReasonInfix errs) >>= j . Left
---     (stA, stX, stB) : sts -> do
---       let startX = spanStart (stSpan stX)
---       put stA
---       unParserT (pa <* endP) $ \case
---         Left errA -> go (errs :|> (startX, InfixPhaseLeft, errA)) sts
---         Right a -> do
---           put stB
---           unParserT pb $ \case
---             Left errB -> go (errs :|> (startX, InfixPhaseRight, errB)) sts
---             Right b -> do
---               ec <- tryT (j (Right (Just (a, stX, b))))
---               case ec of
---                 Left errC -> go (errs :|> (startX, InfixPhaseCont, errC)) sts
---                 Right c -> pure c
-
--- private
-optInfixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (a, St, b))
-optInfixRP tx pa pb = ParserT (\k st -> subInfixP st pa pb (optInfixFn k) (breakAllRP (TL.fromStrict tx) st))
-
--- private
-optInfixFn
-  :: (ElemP e m (Maybe (a, St, b)) -> T e m r)
-  -> (ElemP e m (Maybe (a, St, b)) -> T e m r)
-optInfixFn = undefined
-
--- optInfixFn k e = case e of
---   Right _ -> k e
---   Left _ -> k (Right Nothing)
-
--- private
-requireInfixFn
-  :: (Monad m)
-  => (ElemP e m (a, b) -> T e m r)
-  -> (ElemP e m (Maybe (a, St, b)) -> T e m r)
-requireInfixFn = undefined
-
--- requireInfixFn k = \case
---   Right mxab ->
---     case mxab of
---       Nothing -> mkErrT ReasonEmpty >>= k . Left
---       Just (a, _, b) -> k (Right (a, b))
---   Left e -> k (Left e)
-
--- | Right-associative infix parsing. Searches for the operator from START to END of range,
--- trying only the first break point.
-infixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
-infixRP tx pa pb = ParserT (\k st -> subInfixP st pa pb (requireInfixFn k) (maybeToList (breakRP (TL.fromStrict tx) st)))
-
--- | Right-associative infix parsing. Searches for the operator from START to END of range,
--- trying subsequent break points until success.
-someInfixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
-someInfixRP tx pa pb = ParserT (\k st -> subInfixP st pa pb (requireInfixFn k) (breakAllRP (TL.fromStrict tx) st))
+--   go !acc !st = do
+--     mz <- optInfixRP tx pa (pure ())
+--     case mz of
+--       Nothing -> optP pa >>= maybe (acc <$ putP st) (pure . (acc :|>))
+--       Just (a, st', _) -> go (acc :|> a) st'
+--
+-- -- | Split on the delimiter, parsing segments with a narrowed range, until parsing fails.
+-- -- Returns the sequence of successes with state at the delimiter preceding the failure (or end of input),
+-- -- Note that this will always succeed, sometimes consuming no input and yielding empty results.
+-- splitP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
+-- splitP tx pa = getP >>= splitTailP tx pa Empty
+--
+-- -- | Like 'splitP' but ensures the sequence is at least length 1.
+-- split1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
+-- split1P tx pa = do
+--   mz <- optInfixRP tx pa (pure ())
+--   case mz of
+--     Nothing -> fmap Seq.singleton pa
+--     Just (a, st', _) -> splitTailP tx pa (Seq.singleton a) st'
+--
+-- -- | Like 'splitP' but ensures the sequence is at least length 2.
+-- -- (This ensures there is at least one delimiter included.)
+-- split2P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
+-- split2P tx pa = do
+--   a0 <- someBreakP tx pa
+--   mz <- optInfixRP tx pa (pure ())
+--   case mz of
+--     Nothing -> fmap (Empty :|> a0 :|>) pa
+--     Just (a1, st', _) -> splitTailP tx pa (Empty :|> a0 :|> a1) st'
+--
+-- -- | Like 'splitP' but ensures a leading delimiter
+-- leadP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
+-- leadP tx pa = do
+--   mu <- optP (textP tx)
+--   case mu of
+--     Nothing -> pure Empty
+--     Just _ -> split1P tx pa
+--
+-- -- | Like 'split1P' but ensures a leading delimiter
+-- lead1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
+-- lead1P tx pa = textP tx >> split1P tx pa
+--
+-- -- | Like 'splitP' but ensures a trailing delimiter
+-- trailP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
+-- trailP tx pa = do
+--   as <- splitP tx pa
+--   case as of
+--     Empty -> pure Empty
+--     _ -> as <$ textP tx
+--
+-- -- | Like 'split1P' but ensures a trailing delimiter
+-- trail1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
+-- trail1P tx pa = split1P tx pa <* textP tx
+--
+-- -- private
+-- subInfixP
+--   :: (Monad m)
+--   => St
+--   -> ParserT e m a
+--   -> ParserT e m b
+--   -> (ElemP e m (Maybe (a, St, b)) -> T e m r)
+--   -> [(St, St, St)]
+--   -> T e m r
+-- subInfixP = undefined
+--
+-- -- subInfixP st0 pa pb j = go Empty
+-- --  where
+-- --   go !errs = \case
+-- --     [] -> do
+-- --       put st0
+-- --       case errs of
+-- --         Empty -> j (Right Nothing)
+-- --         _ -> mkErrT (ReasonInfix errs) >>= j . Left
+-- --     (stA, stX, stB) : sts -> do
+-- --       let startX = spanStart (stSpan stX)
+-- --       put stA
+-- --       unParserT (pa <* endP) $ \case
+-- --         Left errA -> go (errs :|> (startX, InfixPhaseLeft, errA)) sts
+-- --         Right a -> do
+-- --           put stB
+-- --           unParserT pb $ \case
+-- --             Left errB -> go (errs :|> (startX, InfixPhaseRight, errB)) sts
+-- --             Right b -> do
+-- --               ec <- tryT (j (Right (Just (a, stX, b))))
+-- --               case ec of
+-- --                 Left errC -> go (errs :|> (startX, InfixPhaseCont, errC)) sts
+-- --                 Right c -> pure c
+--
+-- -- private
+-- optInfixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (a, St, b))
+-- optInfixRP tx pa pb = ParserT (\k st -> subInfixP st pa pb (optInfixFn k) (breakAllRP (TL.fromStrict tx) st))
+--
+-- -- private
+-- optInfixFn
+--   :: (ElemP e m (Maybe (a, St, b)) -> T e m r)
+--   -> (ElemP e m (Maybe (a, St, b)) -> T e m r)
+-- optInfixFn = undefined
+--
+-- -- optInfixFn k e = case e of
+-- --   Right _ -> k e
+-- --   Left _ -> k (Right Nothing)
+--
+-- -- private
+-- requireInfixFn
+--   :: (Monad m)
+--   => (ElemP e m (a, b) -> T e m r)
+--   -> (ElemP e m (Maybe (a, St, b)) -> T e m r)
+-- requireInfixFn = undefined
+-- -- requireInfixFn k = \case
+-- --   Right mxab ->
+-- --     case mxab of
+-- --       Nothing -> mkErrT ReasonEmpty >>= k . Left
+-- --       Just (a, _, b) -> k (Right (a, b))
+-- --   Left e -> k (Left e)
+--
+-- -- | Right-associative infix parsing. Searches for the operator from START to END of range,
+-- -- trying only the first break point.
+-- infixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
+-- infixRP tx pa pb = ParserT (\k st -> subInfixP st pa pb (requireInfixFn k) (maybeToList (breakRP (TL.fromStrict tx) st)))
+--
+-- -- | Right-associative infix parsing. Searches for the operator from START to END of range,
+-- -- trying subsequent break points until success.
+-- someInfixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
+-- someInfixRP tx pa pb = ParserT (\k st -> subInfixP st pa pb (requireInfixFn k) (breakAllRP (TL.fromStrict tx) st))

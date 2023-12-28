@@ -21,7 +21,6 @@ module Looksee.Combinators
   , strip1P
   , stripStart1P
   , stripEnd1P
-  , scopeP
   , iterP
   , strP
   , doubleStrP
@@ -31,7 +30,7 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Monad (void)
-import Control.Monad.State.Strict (MonadState (..), StateT, evalStateT)
+import Control.Monad.State.Strict (MonadState (..))
 import Data.Bifunctor (bimap)
 import Data.Char (digitToInt, isDigit, isSpace)
 import Data.Foldable (toList)
@@ -54,12 +53,8 @@ import Looksee.Parser
   , optP
   , takeWhile1P
   , textP_
-  , transP
+  , scopeP
   )
-
--- | Parse with some local state
-scopeP :: (Monad m) => s -> ParserT e (StateT s m) a -> ParserT e m a
-scopeP s0 = transP (`evalStateT` s0)
 
 -- | Repeats the parser until it returns a 'Just' value
 iterP :: (Functor m) => ParserT e m (Maybe a) -> ParserT e m a
