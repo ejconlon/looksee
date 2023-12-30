@@ -1,3 +1,5 @@
+{-# LANGUAGE UndecidableInstances #-}
+
 module Looksee.Match
   ( MatchErr (..)
   , LocMatchErr (..)
@@ -57,16 +59,35 @@ newtype LocMatchErr e k = LocMatchErr
   deriving stock (Show)
   deriving newtype (Eq, Ord)
 
-newtype MatchT e k m a = MatchM {unMatchM :: ReaderT (Memo SexpF k) (ExceptT (LocMatchErr e k) m) a}
-  deriving newtype (Functor, Applicative, Monad, MonadReader (Memo SexpF k), MonadError (LocMatchErr e k))
+newtype MatchT e k m a = MatchT {unMatchT :: ReaderT (Memo SexpF k) (ExceptT (LocMatchErr e k) m) a}
+  deriving newtype (Functor, Applicative, Monad)
 
 type MatchM e k = MatchT e k Identity
 
 instance MonadTrans (MatchT e k) where
-  lift = MatchM . lift . lift
+  lift = MatchT . lift . lift
+
+unlift :: (Monad m) => (Memo SexpF k -> m (Either (LocMatchErr e k) a)) -> MatchT e k m a
+unlift f = MatchT $ do
+  s <- ask
+  ea <- lift (lift (f s))
+  either throwError pure ea
+
+instance (MonadReader r m) => MonadReader r (MatchT e k m) where
+  ask = lift ask
+  local f m = unlift (local f . runMatchT m)
+
+instance (MonadState s m) => MonadState s (MatchT e k m) where
+  get = lift get
+  put = lift . put
+  state = lift . state
+
+instance (MonadError x m) => MonadError x (MatchT e k m) where
+  throwError = lift . throwError
+  catchError m f = unlift (\s -> catchError (runMatchT m s) (flip runMatchT s . f))
 
 runMatchT :: MatchT e k m a -> Memo SexpF k -> m (Either (LocMatchErr e k) a)
-runMatchT m r = runExceptT (runReaderT (unMatchM m) r)
+runMatchT m r = runExceptT (runReaderT (unMatchT m) r)
 
 runMatchM :: MatchM e k a -> Memo SexpF k -> Either (LocMatchErr e k) a
 runMatchM m r = runIdentity (runMatchT m r)
@@ -103,24 +124,24 @@ instance (Monad m) => Monad (SeqMatchT e k m) where
       SeqMatchRest mx k -> SeqMatchRest mx (go . k)
 
 annoM :: (Monad m) => MatchT e k m a -> MatchT e k m (Anno k a)
-annoM m = asks (Anno . B.memoKey) <*> m
+annoM m = MatchT (asks (Anno . B.memoKey)) <*> m
 
 memoM :: (Monad m) => MatchT e k m (f (Memo f k)) -> MatchT e k m (Memo f k)
-memoM m = asks (MemoP . B.memoKey) <*> m
+memoM m = MatchT (asks (MemoP . B.memoKey)) <*> m
 
 errM :: (Monad m) => MatchErr e (LocMatchErr e k) -> MatchT e k m a
 errM e = do
-  s <- ask
-  throwError (LocMatchErr (Anno (B.memoKey s) e))
+  s <- MatchT ask
+  MatchT (throwError (LocMatchErr (Anno (B.memoKey s) e)))
 
 embedM :: (Monad m) => e -> MatchT e k m a
 embedM = errM . MatchErrEmbed
 
 matchM :: (Monad m) => (SexpF (Memo SexpF k) -> Either (MatchErr e (LocMatchErr e k)) a) -> MatchT e k m a
 matchM f = do
-  s <- ask
+  s <- MatchT ask
   case f (B.memoVal s) of
-    Left e -> throwError (LocMatchErr (Anno (B.memoKey s) e))
+    Left e -> MatchT (throwError (LocMatchErr (Anno (B.memoKey s) e)))
     Right a -> pure a
 
 data S k = S !Int !(Seq (Memo SexpF k))
@@ -141,7 +162,7 @@ goSeqX = \case
       Empty -> lift (errM (MatchErrListElem i'))
       c :<| cs' -> do
         put (S i' cs')
-        x <- lift (local (const c) mx)
+        x <- lift (MatchT (local (const c) (unMatchT mx)))
         goSeqX (k x)
   SeqMatchRest mx k -> goRestX mx k
 
@@ -156,14 +177,14 @@ goRestX mx k = go Empty
       Empty -> goSeqX (k acc)
       c :<| cs' -> do
         put (S i' cs')
-        x <- lift (local (const c) mx)
+        x <- lift (MatchT (local (const c) (unMatchT mx)))
         go (acc :|> x)
 
 listFromM :: (Monad m) => Int -> Brace -> SeqMatchT e k m a -> MatchT e k m a
 listFromM i0 b0 r = goStart
  where
   goStart = do
-    s <- ask
+    s <- MatchT ask
     case B.memoVal s of
       SexpListF b cs0 | b == b0 -> do
         let s0 = S i0 (Seq.drop i0 cs0)
@@ -185,7 +206,7 @@ altM = go Empty
   go !acc = \case
     [] -> errM (MatchErrAlt acc)
     (l, m) : ms -> do
-      s <- ask
+      s <- MatchT ask
       res <- lift (runMatchT m s)
       case res of
         Right a -> pure a
@@ -195,7 +216,7 @@ lookM :: (Monad m) => Brace -> [(Text, MatchT e k m (), SeqMatchT e k m a)] -> M
 lookM b0 as0 = goRoot
  where
   goRoot = do
-    s <- ask
+    s <- MatchT ask
     case B.memoVal s of
       SexpListF b cs0 | b == b0 ->
         case cs0 of
@@ -208,7 +229,7 @@ lookM b0 as0 = goRoot
       resHd <- lift (runMatchT m hd)
       case resHd of
         Right _ -> do
-          s <- ask
+          s <- MatchT ask
           resTl <- lift (runMatchT (listFromM 1 b0 r) s)
           case resTl of
             Right a -> pure a
