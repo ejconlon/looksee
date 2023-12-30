@@ -5,19 +5,19 @@
 
 packages:
 - completed:
-    hackage: bowtie-0.1.0@sha256:ea576079a0f4469694b43ff4214ba1fbd27a359c560125ebbe52e0bfafa3e190,1771
+    hackage: bowtie-0.2.0@sha256:1fea0ef4521f8c77544aa885f47d6999acf75db8f0b093fe639d24004a1fbe6f,1771
     pantry-tree:
-      sha256: 99b78d269df9bffe9a29264cf6d8cd023674df98f32070ee1718142c1bed7418
-      size: 158
+      sha256: e72e660bb9ba5ec65ca5572f49fe4467a4a8fba7319e566131c373daaf9dc0af
+      size: 159
   original:
-    hackage: bowtie-0.1.0
+    hackage: bowtie-0.2.0
 - completed:
-    hackage: errata-0.4.0.1@sha256:c535562dc79845190134bcd833a9fb3d8148361360085b1de917dded6044348d,2369
+    hackage: errata-0.4.0.2@sha256:47e14aee64dd54dbfd25984423b66c15dcf2c7526d39ee06e60b1f6dab6bb3bc,2386
     pantry-tree:
-      sha256: f6d4132b0ae34a2c8b3a5a73e51cc77744f5e6925fe32d071543e1dd80d14896
+      sha256: 672be5899d51c056033b12b8bc109f788ce30c8680cf3bcbcd83f1a6962ba110
       size: 809
   original:
-    hackage: errata-0.4.0.1
+    hackage: errata-0.4.0.2
 - completed:
     hackage: falsify-0.2.0@sha256:a9ec175cfb20dc5afeedac69f424c77589729fce23733030abf22dc2053abc41,5265
     pantry-tree:
@@ -38,7 +38,7 @@ packages:
     git: git@github.com:ejconlon/daytripper.git
 snapshots:
 - completed:
-    sha256: 53a2800f7fe0c4628af0e7d5e985707dd3af9863ac3983a43c835dbaa8ed5f35
-    size: 714094
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/3.yaml
-  original: lts-22.3
+    sha256: 8b211c5a6aad3787e023dfddaf7de7868968e4f240ecedf14ad1c5b2199046ca
+    size: 714097
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/4.yaml
+  original: lts-22.4

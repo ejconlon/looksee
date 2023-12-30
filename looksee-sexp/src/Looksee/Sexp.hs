@@ -17,7 +17,7 @@ module Looksee.Sexp
   )
 where
 
-import Bowtie (Anno (..), Memo (..), MemoF (..))
+import Bowtie (Anno (..), Memo (..), pattern MemoP)
 import Bowtie qualified as B
 import Control.Foldl (Fold (..))
 import Control.Monad (guard)
@@ -31,6 +31,7 @@ import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.String (IsString (..))
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Void (Void)
 import Looksee (Parser, ParserT, Span (..))
 import Looksee qualified as L
@@ -47,6 +48,7 @@ data Atom
   | AtomInt !Integer
   | AtomSci !Scientific
   | AtomStr !Text
+  | AtomChar !Char
   deriving stock (Eq, Ord, Show)
 
 instance Pretty Atom where
@@ -55,12 +57,14 @@ instance Pretty Atom where
     AtomInt x -> pretty x
     AtomSci x -> P.viaShow x
     AtomStr x -> "\"" <> pretty x <> "\""
+    AtomChar x -> "'" <> pretty x <> "'"
 
 data AtomType
   = AtomTypeSym
   | AtomTypeInt
   | AtomTypeSci
   | AtomTypeStr
+  | AtomTypeChar
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 atomType :: Atom -> AtomType
@@ -69,8 +73,9 @@ atomType = \case
   AtomInt _ -> AtomTypeInt
   AtomSci _ -> AtomTypeSci
   AtomStr _ -> AtomTypeStr
+  AtomChar _ -> AtomTypeChar
 
-data Brace = BraceParen | BraceCurly | BraceSquare | BraceAngle
+data Brace = BraceParen | BraceCurly | BraceSquare
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
 openBrace :: (IsString s) => Brace -> s
@@ -78,21 +83,18 @@ openBrace = \case
   BraceParen -> fromString "("
   BraceCurly -> fromString "{"
   BraceSquare -> fromString "["
-  BraceAngle -> fromString "<"
 
 closeBrace :: (IsString s) => Brace -> s
 closeBrace = \case
   BraceParen -> fromString ")"
   BraceCurly -> fromString "}"
   BraceSquare -> fromString "]"
-  BraceAngle -> fromString ">"
 
 readOpenBrace :: Char -> Maybe Brace
 readOpenBrace = \case
   '(' -> Just BraceParen
   '{' -> Just BraceCurly
   '[' -> Just BraceSquare
-  '<' -> Just BraceAngle
   _ -> Nothing
 
 readCloseBrace :: Char -> Maybe Brace
@@ -100,21 +102,22 @@ readCloseBrace = \case
   ')' -> Just BraceParen
   '}' -> Just BraceCurly
   ']' -> Just BraceSquare
-  '>' -> Just BraceAngle
   _ -> Nothing
 
 -- | An S-expression
 data SexpF r
   = SexpAtomF !Atom
   | SexpListF !Brace !(Seq r)
-  -- \| SexpQuote !Sexp
-  -- \| SexpUnquote !Sexp
+  | SexpQuoteF r
+  | SexpUnquoteF r
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
 instance (Pretty r) => Pretty (SexpF r) where
   pretty = \case
     SexpAtomF a -> pretty a
     SexpListF b ss -> openBrace b <> P.hsep (fmap pretty (toList ss)) <> closeBrace b
+    SexpQuoteF s -> "`" <> pretty s
+    SexpUnquoteF s -> "," <> pretty s
 
 newtype Sexp = Sexp {unSexp :: SexpF Sexp}
   deriving stock (Show)
@@ -129,12 +132,16 @@ instance Corecursive Sexp where embed = Sexp
 data SexpType
   = SexpTypeAtom !AtomType
   | SexpTypeList !Brace
+  | SexpTypeQuote
+  | SexpTypeUnquote
   deriving stock (Eq, Ord, Show)
 
 sexpType :: SexpF r -> SexpType
 sexpType = \case
   SexpAtomF at -> SexpTypeAtom (atomType at)
   SexpListF b _ -> SexpTypeList b
+  SexpQuoteF _ -> SexpTypeQuote
+  SexpUnquoteF _ -> SexpTypeUnquote
 
 class IsSexp s where
   toSexp :: s -> Sexp
@@ -157,20 +164,27 @@ instance IsSexp Integer where
 instance IsSexp Symbol where
   toSexp = toSexp . AtomSym
 
+instance IsSexp Char where
+  toSexp = toSexp . AtomChar
+
+instance IsSexp String where
+  toSexp = toSexp . T.pack
+
+instance IsSexp Text where
+  toSexp = toSexp . AtomStr
+
 sexpList :: Brace -> [Sexp] -> Sexp
 sexpList b = Sexp . SexpListF b . Seq.fromList
+
+sexpQuote :: Sexp -> Sexp
+sexpQuote = Sexp . SexpQuoteF
+
+sexpUnquote :: Sexp -> Sexp
+sexpUnquote = Sexp . SexpQuoteF
 
 type OffsetSpan = Span Int
 
 type LocSexp = Memo SexpF OffsetSpan
-
--- TODO put something like this in looksee
-offsetP :: (Monad m) => ParserT e m a -> ParserT e m (Anno OffsetSpan a)
-offsetP p = do
-  Span start _ <- L.spanP
-  a <- p
-  Span end _ <- L.spanP
-  pure (Anno (Span start end) a)
 
 identStartPred :: Char -> Bool
 identStartPred c = not (isDigit c) && identContPred c
@@ -181,24 +195,27 @@ identContPred c =
     isControl c
       || isSpace c
       || c == ';'
-      || c == '#'
       || c == '('
       || c == ')'
       || c == '{'
       || c == '}'
       || c == '['
       || c == ']'
-      || c == '<'
-      || c == '>'
+      || c == '"'
+      || c == '\''
+      || c == '`'
+      || c == ','
 
 look1P :: (Monad m) => (Char -> Bool) -> ParserT e m ()
 look1P p = L.lookP (L.headP >>= guard . p)
 
 -- | A parser for S-expressions
 sexpParser :: Parser Void LocSexp
-sexpParser = L.stripP rootP
+sexpParser = stripP rootP
  where
-  -- (needs explicit forall)
+  -- (these need explicit forall)
+  stripP :: forall a. Parser Void a -> Parser Void a
+  stripP p = spaceP *> p <* spaceP
   stripEndP :: forall a. Parser Void a -> Parser Void a
   stripEndP p = p <* spaceP
   spaceP = do
@@ -213,12 +230,14 @@ sexpParser = L.stripP rootP
       Just c | c == ';' || isSpace c -> spaceP
       _ -> L.space1P -- Fail with this
   symP = look1P identStartPred *> L.takeWhile1P identContPred
+  charLitP = L.charP_ '\'' *> L.headP <* L.charP_ '\''
   atomP =
     L.altP
       [ L.labelP "sym" (AtomSym . Symbol <$> symP)
       , L.labelP "int" (AtomInt <$> L.intP)
       , L.labelP "sci" (AtomSci <$> L.sciP)
       , L.labelP "str" (AtomStr <$> L.strP '"')
+      , L.labelP "char" (AtomChar <$> charLitP)
       ]
   listP = do
     b <-
@@ -227,18 +246,20 @@ sexpParser = L.stripP rootP
           [ BraceParen <$ L.charP_ '('
           , BraceCurly <$ L.charP_ '{'
           , BraceSquare <$ L.charP_ '['
-          , BraceAngle <$ L.charP_ '<'
           ]
     ss <- stripEndP (L.sepByP space1P rootP)
-    stripEndP (L.textP_ (closeBrace b))
+    L.textP_ (closeBrace b)
     pure (SexpListF b ss)
+  quoteP = SexpQuoteF <$> (L.charP_ '`' *> rootP)
+  unquoteP = SexpUnquoteF <$> (L.charP_ ',' *> rootP)
   rootP =
-    fmap (Memo . MemoF) $
-      offsetP $
-        L.altP
-          [ L.labelP "atom" (SexpAtomF <$> atomP)
-          , L.labelP "list" listP
-          ]
+    L.spanAroundP MemoP $
+      L.altP
+        [ L.labelP "atom" (SexpAtomF <$> atomP)
+        , L.labelP "list" listP
+        , L.labelP "quote" quoteP
+        , L.labelP "unquote" unquoteP
+        ]
 
 data X e s = X !(Maybe e) !s
 
@@ -258,6 +279,7 @@ foldUntilErr step initial extract = Fold step' initial' extract'
 
 data RecogElem
   = RecogElemString
+  | RecogElemChar
   | RecogElemComment
   | RecogElemSlashEsc
   | RecogElemBrace !Brace
@@ -281,7 +303,8 @@ type RecogM = ExceptT RecogErr (State RecogState)
 
 data CharCase
   = CharCaseNewline
-  | CharCaseStringQuote
+  | CharCaseDoubleQuote
+  | CharCaseSingleQuote
   | CharCaseOpenComment
   | CharCaseSlashEsc
   | CharCaseOpenBrace !Brace
@@ -292,7 +315,8 @@ readCharCase :: Char -> Maybe CharCase
 readCharCase c =
   if
     | c == '\n' -> Just CharCaseNewline
-    | c == '"' -> Just CharCaseStringQuote
+    | c == '"' -> Just CharCaseDoubleQuote
+    | c == '\'' -> Just CharCaseSingleQuote
     | c == ';' -> Just CharCaseOpenComment
     | c == '\\' -> Just CharCaseSlashEsc
     | otherwise ->
@@ -310,12 +334,17 @@ stepR c = goRet
     mh <- peekStack
     case mh of
       Just RecogElemString -> goString
+      Just RecogElemChar -> goChar
       Just RecogElemComment -> goComment
       Just RecogElemSlashEsc -> goSlashEsc
       Just (RecogElemBrace b) -> goDefault (Just b)
       Nothing -> goDefault Nothing
   goString = case readCharCase c of
-    Just CharCaseStringQuote -> popStack
+    Just CharCaseDoubleQuote -> popStack
+    Just CharCaseSlashEsc -> pushStack RecogElemSlashEsc
+    _ -> pure ()
+  goChar = case readCharCase c of
+    Just CharCaseSingleQuote -> popStack
     Just CharCaseSlashEsc -> pushStack RecogElemSlashEsc
     _ -> pure ()
   goComment = case readCharCase c of
@@ -323,7 +352,8 @@ stepR c = goRet
     _ -> pure ()
   goSlashEsc = popStack -- just ignore input and leave slash esc mode
   goDefault mb = case readCharCase c of
-    Just CharCaseStringQuote -> pushStack RecogElemString
+    Just CharCaseDoubleQuote -> pushStack RecogElemString
+    Just CharCaseSingleQuote -> pushStack RecogElemChar
     Just CharCaseOpenComment -> pushStack RecogElemComment
     Just (CharCaseOpenBrace b) -> pushStack (RecogElemBrace b)
     Just (CharCaseCloseBrace b) ->
