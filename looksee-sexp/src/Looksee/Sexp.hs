@@ -108,16 +108,16 @@ readCloseBrace = \case
 data SexpF r
   = SexpAtomF !Atom
   | SexpListF !Brace !(Seq r)
-  | SexpQuoteF r
-  | SexpUnquoteF r
+  -- \| SexpQuoteF r
+  -- \| SexpUnquoteF r
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
 instance (Pretty r) => Pretty (SexpF r) where
   pretty = \case
     SexpAtomF a -> pretty a
     SexpListF b ss -> openBrace b <> P.hsep (fmap pretty (toList ss)) <> closeBrace b
-    SexpQuoteF s -> "`" <> pretty s
-    SexpUnquoteF s -> "," <> pretty s
+    -- SexpQuoteF s -> "`" <> pretty s
+    -- SexpUnquoteF s -> "," <> pretty s
 
 newtype Sexp = Sexp {unSexp :: SexpF Sexp}
   deriving stock (Show)
@@ -132,16 +132,16 @@ instance Corecursive Sexp where embed = Sexp
 data SexpType
   = SexpTypeAtom !AtomType
   | SexpTypeList !Brace
-  | SexpTypeQuote
-  | SexpTypeUnquote
+  -- \| SexpTypeQuote
+  -- \| SexpTypeUnquote
   deriving stock (Eq, Ord, Show)
 
 sexpType :: SexpF r -> SexpType
 sexpType = \case
   SexpAtomF at -> SexpTypeAtom (atomType at)
   SexpListF b _ -> SexpTypeList b
-  SexpQuoteF _ -> SexpTypeQuote
-  SexpUnquoteF _ -> SexpTypeUnquote
+  -- SexpQuoteF _ -> SexpTypeQuote
+  -- SexpUnquoteF _ -> SexpTypeUnquote
 
 class IsSexp s where
   toSexp :: s -> Sexp
@@ -176,11 +176,11 @@ instance IsSexp Text where
 sexpList :: Brace -> [Sexp] -> Sexp
 sexpList b = Sexp . SexpListF b . Seq.fromList
 
-sexpQuote :: Sexp -> Sexp
-sexpQuote = Sexp . SexpQuoteF
+-- sexpQuote :: Sexp -> Sexp
+-- sexpQuote = Sexp . SexpQuoteF
 
-sexpUnquote :: Sexp -> Sexp
-sexpUnquote = Sexp . SexpQuoteF
+-- sexpUnquote :: Sexp -> Sexp
+-- sexpUnquote = Sexp . SexpQuoteF
 
 type OffsetSpan = Span Int
 
@@ -250,15 +250,15 @@ sexpParser = stripP rootP
     ss <- stripEndP (L.sepByP space1P rootP)
     L.textP_ (closeBrace b)
     pure (SexpListF b ss)
-  quoteP = SexpQuoteF <$> (L.charP_ '`' *> rootP)
-  unquoteP = SexpUnquoteF <$> (L.charP_ ',' *> rootP)
+  -- quoteP = SexpQuoteF <$> (L.charP_ '`' *> rootP)
+  -- unquoteP = SexpUnquoteF <$> (L.charP_ ',' *> rootP)
   rootP =
     L.spanAroundP MemoP $
       L.altP
         [ L.labelP "atom" (SexpAtomF <$> atomP)
         , L.labelP "list" listP
-        , L.labelP "quote" quoteP
-        , L.labelP "unquote" unquoteP
+        -- , L.labelP "quote" quoteP
+        -- , L.labelP "unquote" unquoteP
         ]
 
 data X e s = X !(Maybe e) !s
@@ -285,9 +285,8 @@ data RecogElem
   | RecogElemBrace !Brace
   deriving stock (Eq, Ord, Show)
 
-data RecogErr
-  = RecogErrMismatch !Brace
-  | RecogErrQuote
+newtype RecogErr
+  = RecogErrMismatch Brace
   deriving stock (Eq, Ord, Show)
 
 data RecogState = RecogState
