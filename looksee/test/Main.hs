@@ -3,7 +3,7 @@
 
 module Main (main) where
 
-import Control.Applicative (Alternative (..), liftA2)
+import Control.Applicative (Alternative (..))
 import Control.Exception (throwIO)
 import Control.Monad (join)
 import Data.Foldable (for_, toList)
@@ -69,6 +69,8 @@ testBasic =
       , ("repeat1", testRepeat1)
       , ("or", testOr)
       , ("alt", testAlt)
+      , ("branch", testBranch)
+      , ("commit", testCommit)
       , ("opt (empty)", testOptEmpty)
       , ("opt", testOpt)
       , ("bind (1)", testBind1)
@@ -249,6 +251,58 @@ testAlt = fmap testParserCase cases
     , ParserCase "first" parser "hi" (suc "h" 1)
     , ParserCase "middle" parser "zi" (suc "y" 1)
     , ParserCase "last" parser "xi" (suc "y" 1)
+    ]
+
+testBranch :: [TestTree]
+testBranch = fmap testParserCase cases
+ where
+  parser =
+    branchP
+      [ (charP_ 'h', textP "hi")
+      , (charP_ 'y', textP "yi")
+      , (charP_ 'y', textP "ya")
+      ]
+      :: TestParser Text
+  cases =
+    [ ParserCase "empty" parser "" $
+        err (Span 0 0) ReasonEmpty
+    , ParserCase "first" parser "hi" (suc "hi" 0)
+    , ParserCase "fail first" parser "ho" $
+        errAlt
+          (Span 0 2)
+          [ (AltPhaseBranch, Span 2 2, ReasonExpect "hi" "ho")
+          ]
+    , ParserCase "middle" parser "yi" (suc "yi" 0)
+    , ParserCase "last" parser "ya" (suc "ya" 0)
+    , ParserCase "fail rest" parser "yo" $
+        errAlt
+          (Span 0 2)
+          [ (AltPhaseBranch, Span 2 2, ReasonExpect "yi" "yo")
+          , (AltPhaseBranch, Span 2 2, ReasonExpect "ya" "yo")
+          ]
+    ]
+
+testCommit :: [TestTree]
+testCommit = fmap testParserCase cases
+ where
+  parser =
+    commitP
+      [ (charP_ 'h', textP "hi")
+      , (charP_ 'y', textP "yi")
+      , (charP_ 'y', textP "ya")
+      ]
+      :: TestParser Text
+  cases =
+    [ ParserCase "empty" parser "" $
+        err (Span 0 0) ReasonEmpty
+    , ParserCase "first" parser "hi" (suc "hi" 0)
+    , ParserCase "fail first" parser "ho" $
+        err (Span 2 2) (ReasonExpect "hi" "ho")
+    , ParserCase "middle" parser "yi" (suc "yi" 0)
+    , ParserCase "fail last" parser "ya" $
+        err (Span 2 2) (ReasonExpect "yi" "ya")
+    , ParserCase "fail rest" parser "yo" $
+        err (Span 2 2) (ReasonExpect "yi" "yo")
     ]
 
 testOptEmpty :: [TestTree]

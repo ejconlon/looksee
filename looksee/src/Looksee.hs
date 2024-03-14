@@ -30,6 +30,8 @@ module Looksee
   , endP
   , optP
   , lookP
+  , branchP
+  , commitP
   , labelP
   , textP
   , textP_
@@ -98,7 +100,7 @@ module Looksee
   )
 where
 
-import Control.Applicative (Alternative (..), liftA2)
+import Control.Applicative (Alternative (..))
 import Control.Exception (Exception)
 import Control.Monad (ap, void)
 import Control.Monad.Except (ExceptT, MonadError (..), runExceptT)
@@ -488,6 +490,50 @@ lookP :: (Monad m) => ParserT e m a -> ParserT e m a
 lookP (ParserT g) = ParserT $ \j -> do
   st0 <- get
   g (\ea -> put st0 >> j (first (Err . ErrF (stSpan st0) . ReasonLook) ea))
+
+-- private
+subBranchP
+  :: (Monad m)
+  => (Either (Err e) a -> T e m r)
+  -> St
+  -> Seq (AltPhase, Err e)
+  -> [(ParserT e m (), ParserT e m a)]
+  -> T e m r
+subBranchP j st0 = go
+ where
+  go !errs = \case
+    [] -> mkErrT (if Seq.null errs then ReasonEmpty else ReasonAlt errs) >>= j . Left
+    (ParserT gl, ParserT gx) : rest -> gl $ \case
+      Left _ -> put st0 >> go errs rest
+      Right _ -> do
+        put st0
+        gx $ \case
+          Left e -> put st0 >> go (errs :|> (AltPhaseBranch, e)) rest
+          Right r -> do
+            es <- tryT (j (Right r))
+            case es of
+              Left e -> put st0 >> go (errs :|> (AltPhaseCont, e)) rest
+              Right s -> pure s
+
+-- | Branches guarded by lookahead. Use this for more concise errors.
+-- 'altP' will happily tell you about each of the errors it encountered in
+-- every branch, but this will quietly prune non-matching branches.
+-- Tries until first success (in order), so you can tack on a fallthrough case even if
+-- you tried a branch earlier.
+branchP :: (Monad m, Foldable f) => f (ParserT e m (), ParserT e m a) -> ParserT e m a
+branchP falts = ParserT (\j -> get >>= \st0 -> subBranchP j st0 Empty (toList falts))
+
+-- | An alternative to 'branchP' that does not backtrack after committing to a branch.
+commitP :: (Monad m, Foldable f) => f (ParserT e m (), ParserT e m a) -> ParserT e m a
+commitP = go . toList
+ where
+  go = \case
+    [] -> emptyP
+    (p, q) : rest -> do
+      mx <- optP (lookP p)
+      case mx of
+        Nothing -> go rest
+        Just _ -> q
 
 -- | Labels parse errors
 labelP :: (Monad m) => Label -> ParserT e m a -> ParserT e m a

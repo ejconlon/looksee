@@ -116,8 +116,9 @@ instance (Pretty r) => Pretty (SexpF r) where
   pretty = \case
     SexpAtomF a -> pretty a
     SexpListF b ss -> openBrace b <> P.hsep (fmap pretty (toList ss)) <> closeBrace b
-    -- SexpQuoteF s -> "`" <> pretty s
-    -- SexpUnquoteF s -> "," <> pretty s
+
+-- SexpQuoteF s -> "`" <> pretty s
+-- SexpUnquoteF s -> "," <> pretty s
 
 newtype Sexp = Sexp {unSexp :: SexpF Sexp}
   deriving stock (Show)
@@ -140,8 +141,9 @@ sexpType :: SexpF r -> SexpType
 sexpType = \case
   SexpAtomF at -> SexpTypeAtom (atomType at)
   SexpListF b _ -> SexpTypeList b
-  -- SexpQuoteF _ -> SexpTypeQuote
-  -- SexpUnquoteF _ -> SexpTypeUnquote
+
+-- SexpQuoteF _ -> SexpTypeQuote
+-- SexpUnquoteF _ -> SexpTypeUnquote
 
 class IsSexp s where
   toSexp :: s -> Sexp

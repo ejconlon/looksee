@@ -1,4 +1,4 @@
-resolver: lts-22.4
+resolver: lts-22.13
 
 ghc-options:
   "$everything": -haddock
@@ -15,10 +15,7 @@ extra-deps:
 - bowtie-0.2.0
 - errata-0.4.0.2
 - falsify-0.2.0
-# TODO Use released version when falsify bumps
-# - daytripper-0.3.1
-- git: git@github.com:ejconlon/daytripper.git
-  commit: f676b6e5781a51bfe9a4db34b218b696e0286392
+- daytripper-0.3.1
 
 # TODO Remove when falsify bumps
 allow-newer: true

@@ -26,19 +26,15 @@ packages:
   original:
     hackage: falsify-0.2.0
 - completed:
-    commit: f676b6e5781a51bfe9a4db34b218b696e0286392
-    git: git@github.com:ejconlon/daytripper.git
-    name: daytripper
+    hackage: daytripper-0.3.1@sha256:225a6e9348c2b5b6e0a55d408559b55df06f1365d5741d2f9d1856d8632769ae,2985
     pantry-tree:
-      sha256: 01549a18c26273074b29ebf3b0dacbbb6231d4d3ff0e8c45b0d38392a67f410c
-      size: 817
-    version: 0.3.1
+      sha256: 5b714aec8cd526cec33a5b269f332d59fe8587e20cb83af9a5e7c3b53ddde351
+      size: 225
   original:
-    commit: f676b6e5781a51bfe9a4db34b218b696e0286392
-    git: git@github.com:ejconlon/daytripper.git
+    hackage: daytripper-0.3.1
 snapshots:
 - completed:
-    sha256: 8b211c5a6aad3787e023dfddaf7de7868968e4f240ecedf14ad1c5b2199046ca
-    size: 714097
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/4.yaml
-  original: lts-22.4
+    sha256: 6f0bea3ba5b07360f25bc886e8cff8d847767557a492a6f7f6dcb06e3cc79ee9
+    size: 712905
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/13.yaml
+  original: lts-22.13
