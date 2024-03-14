@@ -27,6 +27,7 @@ module Looksee
   , throwP
   , altP
   , emptyP
+  , explainP
   , endP
   , optP
   , lookP
@@ -227,6 +228,10 @@ data AltPhase = AltPhaseBranch | AltPhaseCont
 data InfixPhase = InfixPhaseLeft | InfixPhaseRight | InfixPhaseCont
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
+-- | Whether to hide an underlying error or not
+data HideError = HideErrorNo | HideErrorYes
+  deriving stock (Eq, Ord, Show, Enum, Bounded)
+
 -- | Reason for parse failure
 data Reason e r
   = ReasonCustom !e
@@ -240,6 +245,7 @@ data Reason e r
   | ReasonLook r
   | ReasonTakeNone
   | ReasonEmpty
+  | ReasonExplained !Text !HideError r
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
 deriveBifunctor ''Reason
@@ -484,6 +490,22 @@ altP falts = ParserT (\j -> get >>= \st0 -> subAltP j st0 Empty (toList falts))
 -- | Fail with no results
 emptyP :: (Monad m) => ParserT e m a
 emptyP = ParserT (\j -> mkErrT ReasonEmpty >>= j . Left)
+
+-- | If things fail and you can give a good message explaining why, this combinator will
+-- annotate the error with your explanation. Returning 'True' with message will hide
+-- the original error message in textual rendering.
+explainP :: (Monad m) => (Reason e (Err e) -> Maybe (Text, Bool)) -> ParserT e m a -> ParserT e m a
+explainP f (ParserT g) = ParserT $ \j -> g $ \ea ->
+  case ea of
+    Left e@(Err (ErrF _ re)) ->
+      case f re of
+        Nothing -> j ea
+        Just (msg, hide) -> do
+          sp <- gets stSpan
+          let hide' = if hide then HideErrorYes else HideErrorNo
+          let e' = Err (ErrF sp (ReasonExplained msg hide' e))
+          j (Left e')
+    Right _ -> j ea
 
 -- | Lookahead - rewinds state if the parser succeeds, otherwise throws error
 lookP :: (Monad m) => ParserT e m a -> ParserT e m a
@@ -1024,62 +1046,71 @@ stripStart1P p = space1P *> p
 stripEnd1P :: (Monad m) => ParserT e m a -> ParserT e m a
 stripEnd1P p = p <* space1P
 
--- | Implement this to format custom errors. The list will be joined with `unlines`.
+-- | Implement this to format custom errors. The list will be indented and joined with `unlines`.
 class HasErrMessage e where
-  getErrMessage :: e -> [Text]
+  getErrMessage :: (Int -> Text) -> e -> [Text]
 
 instance HasErrMessage Void where
-  getErrMessage = absurd
+  getErrMessage = const absurd
 
 -- private
 indent :: Int -> [Text] -> [Text]
 indent i = let s = T.replicate (2 * i) " " in fmap (s <>)
 
 instance (HasErrMessage e) => HasErrMessage (Err e) where
-  getErrMessage (Err (ErrF (Span start end) re)) =
-    let pos = "Error in range: (" <> T.pack (show start) <> ", " <> T.pack (show end) <> ")"
-        body = case re of
-          ReasonCustom e ->
-            let hd = "Custom error:"
-                tl = indent 1 (getErrMessage e)
-            in  hd : tl
-          ReasonExpect expected actual ->
-            ["Expected text: '" <> expected <> "' but found: '" <> actual <> "'"]
-          ReasonDemand expected actual ->
-            ["Expected count: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)]
-          ReasonLeftover count ->
-            ["Expected end but had leftover count: " <> T.pack (show count)]
-          ReasonAlt errs ->
-            let hd = "Alternatives:"
-                tl = indent 1 $ do
-                  (_, e) <- toList errs
-                  "Tried:" : indent 1 (getErrMessage e)
-            in  hd : tl
-          ReasonInfix errs ->
-            let hd = "Infix/split failed:"
-                tl = indent 1 $ do
-                  (i, _, e) <- toList errs
-                  let x = "Tried position: " <> T.pack (show i)
-                  x : indent 1 (getErrMessage e)
-            in  hd : tl
-          ReasonFail msg -> ["User reported failure: " <> msg]
-          ReasonLabeled lab e ->
-            let hd = "Labeled parser: " <> unLabel lab
-                tl = indent 1 (getErrMessage e)
-            in  hd : tl
-          ReasonLook e ->
-            let hd = "Error in lookahead:"
-                tl = indent 1 (getErrMessage e)
-            in  hd : tl
-          ReasonTakeNone -> ["Took/dropped no elements"]
-          ReasonEmpty -> ["No parse results"]
-    in  pos : body
+  getErrMessage repPos = go
+   where
+    go (Err (ErrF (Span start end) re)) =
+      let pos = "Error in range " <> repPos start <> "-" <> repPos end <> ":"
+          body = case re of
+            ReasonCustom e ->
+              let hd = "Custom error:"
+                  tl = indent 1 (getErrMessage repPos e)
+              in  hd : tl
+            ReasonExpect expected actual ->
+              ["Expected text: '" <> expected <> "' but found: '" <> actual <> "'"]
+            ReasonDemand expected actual ->
+              ["Expected count: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)]
+            ReasonLeftover count ->
+              ["Expected end but had leftover count: " <> T.pack (show count)]
+            ReasonAlt errs ->
+              let hd = "Alternatives:"
+                  tl = indent 1 $ do
+                    (_, e) <- toList errs
+                    "Tried:" : indent 1 (go e)
+              in  hd : tl
+            ReasonInfix errs ->
+              let hd = "Infix/split failed:"
+                  tl = indent 1 $ do
+                    (i, _, e) <- toList errs
+                    let x = "Tried position: " <> T.pack (show i)
+                    x : indent 1 (go e)
+              in  hd : tl
+            ReasonFail msg -> ["User reported failure: " <> msg]
+            ReasonLabeled lab e ->
+              let hd = "Label: " <> unLabel lab
+                  tl = indent 1 (go e)
+              in  hd : tl
+            ReasonLook e ->
+              let hd = "Error in lookahead:"
+                  tl = indent 1 (go e)
+              in  hd : tl
+            ReasonTakeNone -> ["Took/dropped no elements"]
+            ReasonEmpty -> ["No parse results"]
+            ReasonExplained msg hide e ->
+              case hide of
+                HideErrorNo ->
+                  let tl = indent 1 (go e)
+                  in  msg : tl
+                HideErrorYes -> [msg]
+      in  pos : body
 
 -- | Create 'Errata' formatting a parse error
 errataE :: (HasErrMessage e) => FilePath -> (Int -> (E.Line, E.Column)) -> Err e -> [E.Errata]
 errataE fp mkP e =
   let (line, col) = mkP (spanStart (errSpan e))
-      msg = getErrMessage e
+      repP i = let (l, c) = mkP i in "(" <> T.pack (show l) <> ", " <> T.pack (show c) <> ")"
+      msg = getErrMessage repP e
       block = E.blockSimple E.basicStyle E.basicPointer fp Nothing (line, col, col + 1, Nothing) (Just (T.unlines msg))
   in  [E.Errata Nothing [block] Nothing]
 
