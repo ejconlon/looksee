@@ -41,11 +41,6 @@ import Looksee qualified as L
 import Prettyprinter (Pretty (..))
 import Prettyprinter qualified as P
 
-{- TODO
- - Recognize quote/unquote
- - Add tests
- -}
-
 -- Generic parser combinators
 
 guard1P :: (Monad m) => (Char -> Bool) -> ParserT e m ()
@@ -566,5 +561,7 @@ stepR c = goRet
 extractR :: Maybe RecogErr -> RecogState -> Either RecogErr Bool
 extractR me s = maybe (Right (null (rsStack s))) Left me
 
+-- TODO expose this when quote/unquote recognition is implemented
+-- and it's all tested
 sexpRecognizer :: Fold Char (Either RecogErr Bool)
 sexpRecognizer = foldUntilErr stepR initRecogState extractR
