@@ -6,10 +6,15 @@ module Looksee.Sexp
   , Atom (..)
   , AtomType (..)
   , Brace (..)
+  , Doc (..)
   , SexpF (..)
   , Sexp (..)
   , SexpType (..)
-  , sexpList
+  , pattern SexpAtom
+  , pattern SexpList
+  , pattern SexpQuote
+  , pattern SexpUnquote
+  , pattern SexpDoc
   , IsSexp (..)
   , LocSexp
   , OffsetSpan
@@ -28,7 +33,6 @@ import Data.Foldable (toList)
 import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
 import Data.Scientific (Scientific)
 import Data.Sequence (Seq (..))
-import Data.Sequence qualified as Seq
 import Data.String (IsString (..))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -46,9 +50,6 @@ import Prettyprinter qualified as P
 
 guard1P :: (Monad m) => (Char -> Bool) -> ParserT e m ()
 guard1P f = L.headP >>= guard . f
-
-guard2P :: (Monad m) => (Char -> Bool) -> (Char -> Bool) -> ParserT e m ()
-guard2P f g = guard1P f *> guard1P g
 
 cons1P :: (Monad m) => (Char -> Bool) -> (Char -> Bool) -> ParserT e m Text
 cons1P f g = liftA2 T.cons (L.headP >>= \c -> c <$ guard (f c)) (L.takeWhileP g)
@@ -129,13 +130,17 @@ readCloseBrace = \case
   ']' -> Just BraceSquare
   _ -> Nothing
 
+newtype Doc = Doc {unDoc :: Seq Text}
+  deriving stock (Show)
+  deriving newtype (Eq, Ord)
+
 -- | An S-expression
 data SexpF r
   = SexpAtomF !Atom
   | SexpListF !Brace !(Seq r)
   | SexpQuoteF r
   | SexpUnquoteF r
-  | SexpDocF !(Seq Text) r
+  | SexpDocF !Doc r
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
 instance (Pretty r) => Pretty (SexpF r) where
@@ -144,7 +149,7 @@ instance (Pretty r) => Pretty (SexpF r) where
     SexpListF b rs -> pretty (openBraceChar b) <> P.hsep (fmap pretty (toList rs)) <> pretty (closeBraceChar b)
     SexpQuoteF r -> "`" <> pretty r
     SexpUnquoteF r -> "," <> pretty r
-    SexpDocF d r ->
+    SexpDocF (Doc d) r ->
       case d of
         Empty -> pretty r
         _ -> P.hcat (toList (fmap (\y -> ";|" <> pretty y <> "\n") d :|> pretty r))
@@ -205,14 +210,22 @@ instance IsSexp String where
 instance IsSexp Text where
   toSexp = toSexp . AtomStr
 
-sexpList :: Brace -> [Sexp] -> Sexp
-sexpList b = Sexp . SexpListF b . Seq.fromList
+pattern SexpAtom :: Atom -> Sexp
+pattern SexpAtom x = Sexp (SexpAtomF x)
 
-sexpQuote :: Sexp -> Sexp
-sexpQuote = Sexp . SexpQuoteF
+pattern SexpList :: Brace -> Seq Sexp -> Sexp
+pattern SexpList x y = Sexp (SexpListF x y)
 
-sexpUnquote :: Sexp -> Sexp
-sexpUnquote = Sexp . SexpQuoteF
+pattern SexpQuote :: Sexp -> Sexp
+pattern SexpQuote x = Sexp (SexpQuoteF x)
+
+pattern SexpUnquote :: Sexp -> Sexp
+pattern SexpUnquote x = Sexp (SexpUnquoteF x)
+
+pattern SexpDoc :: Doc -> Sexp -> Sexp
+pattern SexpDoc x y = Sexp (SexpDocF x y)
+
+{-# COMPLETE SexpAtom, SexpList, SexpQuote, SexpUnquote, SexpDoc #-}
 
 -- * Parser
 
@@ -268,7 +281,10 @@ type OffsetSpan = Span Int
 -- Specific parsers
 
 docStartP :: (Monad m) => ParserT e m ()
-docStartP = guard2P isCommentStart isDocCont
+docStartP = L.textP_ ";|"
+
+commentStartP :: (Monad m) => ParserT e m ()
+commentStartP = L.charP_ ';'
 
 spaceNP :: (Monad m) => Int -> ParserT e m Int
 spaceNP !acc = do
@@ -304,23 +320,22 @@ stringLitP = L.strP '"'
 openBraceP :: (Monad m) => ParserT e m Brace
 openBraceP = commitSameP (fmap (\b -> b <$ L.charP_ (openBraceChar b)) [minBound .. maxBound])
 
-docLineP :: (Monad m) => ParserT e m Text
-docLineP = do
-  docStartP
-  lin <- L.takeWhileP (/= '\n')
-  L.charP_ '\n'
-  pure lin
-
-docLinesP :: (Monad m) => ParserT e m (Seq Text)
-docLinesP = go Empty
+docLinesP :: (Monad m) => ParserT e m Doc
+docLinesP = go True Empty
  where
-  go !acc = do
-    mds <- L.lookP (L.optP docStartP)
-    case mds of
-      Nothing -> pure acc
+  lineStartP isFirst = if isFirst then docStartP else commentStartP
+  lineP isFirst = do
+    lineStartP isFirst
+    lin <- L.takeWhileP (/= '\n')
+    L.charP_ '\n'
+    pure lin
+  go !isFirst !acc = do
+    mx <- L.lookP (L.optP (lineStartP isFirst))
+    case mx of
+      Nothing -> pure (Doc acc)
       Just _ -> do
-        lin <- docLineP
-        go (acc :|> lin)
+        lin <- lineP isFirst
+        go False (acc :|> lin)
 
 -- | A parser for S-expressions
 sexpParser :: (Monad m) => ParserT e m LocSexp

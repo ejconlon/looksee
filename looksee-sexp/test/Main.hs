@@ -4,7 +4,7 @@ import Bowtie (unMkMemo)
 import Data.Text (Text)
 import Data.Void (Void)
 import Looksee (Err)
-import Looksee.Sexp (Atom (..), Sexp (..), SexpF (..), sexpParser)
+import Looksee.Sexp (Atom (..), Sexp, sexpParser, pattern SexpAtom)
 import Test.Daytripper (Expect, MonadExpect, daytripperMain, mkUnitRT, testRT)
 import Test.Looksee.Trip (cmpEq, expectParsePretty)
 import Test.Tasty (testGroup)
@@ -17,5 +17,5 @@ main =
   daytripperMain $
     testGroup
       "looksee-sexp"
-      [ testRT $ mkUnitRT "example" expectParseSexp (Sexp (SexpAtomF (AtomInt 1)))
+      [ testRT $ mkUnitRT "example" expectParseSexp (SexpAtom (AtomInt 1))
       ]
