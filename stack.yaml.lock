@@ -5,12 +5,12 @@
 
 packages:
 - completed:
-    hackage: bowtie-0.2.0@sha256:1fea0ef4521f8c77544aa885f47d6999acf75db8f0b093fe639d24004a1fbe6f,1771
+    hackage: daytripper-0.3.1@sha256:225a6e9348c2b5b6e0a55d408559b55df06f1365d5741d2f9d1856d8632769ae,2985
     pantry-tree:
-      sha256: e72e660bb9ba5ec65ca5572f49fe4467a4a8fba7319e566131c373daaf9dc0af
-      size: 159
+      sha256: 5b714aec8cd526cec33a5b269f332d59fe8587e20cb83af9a5e7c3b53ddde351
+      size: 225
   original:
-    hackage: bowtie-0.2.0
+    hackage: daytripper-0.3.1
 - completed:
     hackage: errata-0.4.0.2@sha256:47e14aee64dd54dbfd25984423b66c15dcf2c7526d39ee06e60b1f6dab6bb3bc,2386
     pantry-tree:
@@ -19,19 +19,12 @@ packages:
   original:
     hackage: errata-0.4.0.2
 - completed:
-    hackage: falsify-0.2.0@sha256:a9ec175cfb20dc5afeedac69f424c77589729fce23733030abf22dc2053abc41,5265
+    hackage: falsify-0.2.0@sha256:82ad5e999a80bf9e7a5bcb2fe17c2b9524a95893ff19fcdbf3ef4a671303e444,5451
     pantry-tree:
-      sha256: c798208320e84b3d05564d73a63c6686499a68d667e33e2b8873035f15eaf81b
+      sha256: 94ee859a00223f18c04e5ee0135ca81e50a47d75d23f2084ae3b5784c1d62c2e
       size: 3378
   original:
     hackage: falsify-0.2.0
-- completed:
-    hackage: daytripper-0.3.1@sha256:225a6e9348c2b5b6e0a55d408559b55df06f1365d5741d2f9d1856d8632769ae,2985
-    pantry-tree:
-      sha256: 5b714aec8cd526cec33a5b269f332d59fe8587e20cb83af9a5e7c3b53ddde351
-      size: 225
-  original:
-    hackage: daytripper-0.3.1
 snapshots:
 - completed:
     sha256: 6f0bea3ba5b07360f25bc886e8cff8d847767557a492a6f7f6dcb06e3cc79ee9

@@ -3,17 +3,12 @@ resolver: lts-22.13
 ghc-options:
   "$everything": -haddock
 
-allow-newer-deps:
-- falsify
-
 packages:
 - looksee
 - looksee-trip
-- mello
 
 extra-deps:
-- bowtie-0.2.0
+- daytripper-0.3.1
 - errata-0.4.0.2
 - falsify-0.2.0@r1
-- daytripper-0.3.1
 
