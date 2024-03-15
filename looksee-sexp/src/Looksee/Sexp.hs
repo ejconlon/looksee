@@ -11,8 +11,8 @@ module Looksee.Sexp
   , SexpType (..)
   , sexpList
   , IsSexp (..)
-  , OffsetSpan
   , LocSexp
+  , OffsetSpan
   , sexpParser
   )
 where
@@ -20,7 +20,7 @@ where
 import Bowtie (Anno (..), Memo (..), pattern MemoP)
 import Bowtie qualified as B
 import Control.Foldl (Fold (..))
-import Control.Monad (guard)
+import Control.Monad (guard, unless, void)
 import Control.Monad.Except (ExceptT (..), MonadError (..), runExceptT)
 import Control.Monad.State.Strict (State, gets, modify', runState)
 import Data.Char (isControl, isDigit, isSpace)
@@ -32,11 +32,36 @@ import Data.Sequence qualified as Seq
 import Data.String (IsString (..))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Void (Void)
-import Looksee (Parser, ParserT, Span (..))
+import Looksee (ParserT, Span (..))
 import Looksee qualified as L
 import Prettyprinter (Pretty (..))
 import Prettyprinter qualified as P
+
+{- TODO
+ - Recognize quote/unquote
+ - Add tests
+ -}
+
+-- Generic parser combinators
+
+guard1P :: (Monad m) => (Char -> Bool) -> ParserT e m ()
+guard1P f = L.headP >>= guard . f
+
+guard2P :: (Monad m) => (Char -> Bool) -> (Char -> Bool) -> ParserT e m ()
+guard2P f g = guard1P f *> guard1P g
+
+cons1P :: (Monad m) => (Char -> Bool) -> (Char -> Bool) -> ParserT e m Text
+cons1P f g = liftA2 T.cons (L.headP >>= \c -> c <$ guard (f c)) (L.takeWhileP g)
+
+commitSameP :: (Monad m) => [ParserT e m a] -> ParserT e m a
+commitSameP = L.commitP . fmap (\p -> (void p, p))
+
+explainEmptyP :: (Monad m) => Text -> ParserT e m a -> ParserT e m a
+explainEmptyP msg = L.explainP $ \case
+  L.ReasonEmpty -> Just (msg, True)
+  _ -> Nothing
+
+-- Domain-specific stuff
 
 newtype Symbol = Symbol {unSymbol :: Text}
   deriving stock (Show)
@@ -78,17 +103,17 @@ atomType = \case
 data Brace = BraceParen | BraceCurly | BraceSquare
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
-openBrace :: (IsString s) => Brace -> s
-openBrace = \case
-  BraceParen -> fromString "("
-  BraceCurly -> fromString "{"
-  BraceSquare -> fromString "["
+openBraceChar :: Brace -> Char
+openBraceChar = \case
+  BraceParen -> '('
+  BraceCurly -> '{'
+  BraceSquare -> '['
 
-closeBrace :: (IsString s) => Brace -> s
-closeBrace = \case
-  BraceParen -> fromString ")"
-  BraceCurly -> fromString "}"
-  BraceSquare -> fromString "]"
+closeBraceChar :: Brace -> Char
+closeBraceChar = \case
+  BraceParen -> ')'
+  BraceCurly -> '}'
+  BraceSquare -> ']'
 
 readOpenBrace :: Char -> Maybe Brace
 readOpenBrace = \case
@@ -108,17 +133,21 @@ readCloseBrace = \case
 data SexpF r
   = SexpAtomF !Atom
   | SexpListF !Brace !(Seq r)
-  -- \| SexpQuoteF r
-  -- \| SexpUnquoteF r
+  | SexpQuoteF r
+  | SexpUnquoteF r
+  | SexpDocF !(Seq Text) r
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
 instance (Pretty r) => Pretty (SexpF r) where
   pretty = \case
     SexpAtomF a -> pretty a
-    SexpListF b ss -> openBrace b <> P.hsep (fmap pretty (toList ss)) <> closeBrace b
-
--- SexpQuoteF s -> "`" <> pretty s
--- SexpUnquoteF s -> "," <> pretty s
+    SexpListF b rs -> pretty (openBraceChar b) <> P.hsep (fmap pretty (toList rs)) <> pretty (closeBraceChar b)
+    SexpQuoteF r -> "`" <> pretty r
+    SexpUnquoteF r -> "," <> pretty r
+    SexpDocF d r ->
+      case d of
+        Empty -> pretty r
+        _ -> P.hcat (toList (fmap (\y -> ";|" <> pretty y <> "\n") d :|> pretty r))
 
 newtype Sexp = Sexp {unSexp :: SexpF Sexp}
   deriving stock (Show)
@@ -133,17 +162,18 @@ instance Corecursive Sexp where embed = Sexp
 data SexpType
   = SexpTypeAtom !AtomType
   | SexpTypeList !Brace
-  -- \| SexpTypeQuote
-  -- \| SexpTypeUnquote
+  | SexpTypeQuote
+  | SexpTypeUnquote
+  | SexpTypeDoc
   deriving stock (Eq, Ord, Show)
 
 sexpType :: SexpF r -> SexpType
 sexpType = \case
   SexpAtomF at -> SexpTypeAtom (atomType at)
   SexpListF b _ -> SexpTypeList b
-
--- SexpQuoteF _ -> SexpTypeQuote
--- SexpUnquoteF _ -> SexpTypeUnquote
+  SexpQuoteF _ -> SexpTypeQuote
+  SexpUnquoteF _ -> SexpTypeUnquote
+  SexpDocF _ _ -> SexpTypeDoc
 
 class IsSexp s where
   toSexp :: s -> Sexp
@@ -178,90 +208,154 @@ instance IsSexp Text where
 sexpList :: Brace -> [Sexp] -> Sexp
 sexpList b = Sexp . SexpListF b . Seq.fromList
 
--- sexpQuote :: Sexp -> Sexp
--- sexpQuote = Sexp . SexpQuoteF
+sexpQuote :: Sexp -> Sexp
+sexpQuote = Sexp . SexpQuoteF
 
--- sexpUnquote :: Sexp -> Sexp
--- sexpUnquote = Sexp . SexpQuoteF
+sexpUnquote :: Sexp -> Sexp
+sexpUnquote = Sexp . SexpQuoteF
 
-type OffsetSpan = Span Int
+-- * Parser
 
-type LocSexp = Memo SexpF OffsetSpan
+-- Char predicates
 
-identStartPred :: Char -> Bool
-identStartPred c = not (isDigit c) && identContPred c
-
-identContPred :: Char -> Bool
-identContPred c =
+isSymStart
+  , isSymCont
+  , isListStart
+  , isListEnd
+  , isCharStart
+  , isStringStart
+  , isQuoteStart
+  , isUnquoteStart
+  , isCommentStart
+  , isDocCont
+  , isNumStart
+  , isAtomStart
+    :: Char -> Bool
+isSymStart c = not (isDigit c) && isSymCont c
+isSymCont c =
   not $
     isControl c
       || isSpace c
-      || c == ';'
-      || c == '('
-      || c == ')'
-      || c == '{'
-      || c == '}'
-      || c == '['
-      || c == ']'
-      || c == '"'
-      || c == '\''
-      || c == '`'
-      || c == ','
+      || isCommentStart c
+      || isListStart c
+      || isListEnd c
+      || isStringStart c
+      || isCharStart c
+      || isQuoteStart c
+      || isUnquoteStart c
+      || isDigit c
+isListStart c = c == '(' || c == '{' || c == '['
+isListEnd c = c == ')' || c == '}' || c == ']'
+isCharStart c = c == '\''
+isStringStart c = c == '\"'
+isQuoteStart c = c == '`'
+isUnquoteStart c = c == ','
+isCommentStart c = c == ';'
+isDocCont c = c == '|'
+isNumStart c = isDigit c || c == '-'
+isAtomStart c =
+  isSymStart c
+    || isNumStart c
+    || isStringStart c
+    || isCharStart c
 
-look1P :: (Monad m) => (Char -> Bool) -> ParserT e m ()
-look1P p = L.lookP (L.headP >>= guard . p)
+-- The final recursive type
+
+type LocSexp = Memo SexpF OffsetSpan
+
+type OffsetSpan = Span Int
+
+-- Specific parsers
+
+docStartP :: (Monad m) => ParserT e m ()
+docStartP = guard2P isCommentStart isDocCont
+
+spaceNP :: (Monad m) => Int -> ParserT e m Int
+spaceNP !acc = do
+  mc <- L.lookP L.unconsP
+  case mc of
+    Just ';' -> do
+      mds <- L.lookP (L.optP docStartP)
+      case mds of
+        Just _ -> pure acc
+        Nothing -> L.dropWhileP (/= '\n') >>= spaceNP . (acc +)
+    Just c | isSpace c -> L.dropWhileP isSpace >>= spaceNP . (acc +)
+    _ -> pure acc
+
+spaceP, space1P :: (Monad m) => ParserT e m ()
+spaceP = void (spaceNP 0)
+space1P = do
+  acc <- spaceNP 0
+  unless (acc > 0) L.space1P -- Use this to fail
+
+stripP, stripEndP :: (Monad m) => ParserT e m a -> ParserT e m a
+stripP p = spaceP *> p <* spaceP
+stripEndP p = p <* spaceP
+
+symP :: (Monad m) => ParserT e m Symbol
+symP = fmap Symbol (cons1P isSymStart isSymCont)
+
+charLitP :: (Monad m) => ParserT e m Char
+charLitP = L.charP_ '\'' *> L.headP <* L.charP_ '\''
+
+stringLitP :: (Monad m) => ParserT e m Text
+stringLitP = L.strP '"'
+
+openBraceP :: (Monad m) => ParserT e m Brace
+openBraceP = commitSameP (fmap (\b -> b <$ L.charP_ (openBraceChar b)) [minBound .. maxBound])
+
+docLineP :: (Monad m) => ParserT e m Text
+docLineP = do
+  docStartP
+  lin <- L.takeWhileP (/= '\n')
+  L.charP_ '\n'
+  pure lin
+
+docLinesP :: (Monad m) => ParserT e m (Seq Text)
+docLinesP = go Empty
+ where
+  go !acc = do
+    mds <- L.lookP (L.optP docStartP)
+    case mds of
+      Nothing -> pure acc
+      Just _ -> do
+        lin <- docLineP
+        go (acc :|> lin)
 
 -- | A parser for S-expressions
-sexpParser :: Parser Void LocSexp
+sexpParser :: (Monad m) => ParserT e m LocSexp
 sexpParser = stripP rootP
  where
-  -- (these need explicit forall)
-  stripP :: forall a. Parser Void a -> Parser Void a
-  stripP p = spaceP *> p <* spaceP
-  stripEndP :: forall a. Parser Void a -> Parser Void a
-  stripEndP p = p <* spaceP
-  spaceP = do
-    mhd <- L.lookP L.unconsP
-    case mhd of
-      Just ';' -> L.dropWhileP (/= '\n') *> spaceP
-      Just c | isSpace c -> spaceP
-      _ -> pure ()
-  space1P = do
-    mhd <- L.lookP L.unconsP
-    case mhd of
-      Just c | c == ';' || isSpace c -> spaceP
-      _ -> L.space1P -- Fail with this
-  symP = look1P identStartPred *> L.takeWhile1P identContPred
-  charLitP = L.charP_ '\'' *> L.headP <* L.charP_ '\''
-  atomP =
-    L.altP
-      [ L.labelP "sym" (AtomSym . Symbol <$> symP)
-      , L.labelP "int" (AtomInt <$> L.intP)
-      , L.labelP "sci" (AtomSci <$> L.sciP)
-      , L.labelP "str" (AtomStr <$> L.strP '"')
-      , L.labelP "char" (AtomChar <$> charLitP)
-      ]
-  listP = do
-    b <-
-      stripEndP $
-        L.altP
-          [ BraceParen <$ L.charP_ '('
-          , BraceCurly <$ L.charP_ '{'
-          , BraceSquare <$ L.charP_ '['
-          ]
-    ss <- stripEndP (L.sepByP space1P rootP)
-    L.textP_ (closeBrace b)
-    pure (SexpListF b ss)
-  -- quoteP = SexpQuoteF <$> (L.charP_ '`' *> rootP)
-  -- unquoteP = SexpUnquoteF <$> (L.charP_ ',' *> rootP)
   rootP =
-    L.spanAroundP MemoP $
-      L.altP
-        [ L.labelP "atom" (SexpAtomF <$> atomP)
-        , L.labelP "list" listP
-        -- , L.labelP "quote" quoteP
-        -- , L.labelP "unquote" unquoteP
+    explainEmptyP "Not a recognizable Sexp" $
+      L.spanAroundP MemoP $
+        L.commitP
+          [ (guard1P isListStart, L.labelP "list" listP)
+          , (guard1P isQuoteStart, L.labelP "quote" quoteP)
+          , (guard1P isUnquoteStart, L.labelP "unquote" unquoteP)
+          , (guard1P isAtomStart, L.labelP "atom" atomP)
+          , (docStartP, L.labelP "doc" docP)
+          ]
+  listP = do
+    b <- stripEndP openBraceP
+    ss <- stripEndP (L.sepByP space1P rootP)
+    L.charP_ (closeBraceChar b)
+    pure (SexpListF b ss)
+  quoteP = L.charP_ '`' *> fmap SexpQuoteF rootP
+  unquoteP = L.charP_ ',' *> fmap SexpQuoteF rootP
+  atomP =
+    SexpAtomF
+      <$> L.commitP
+        [ (guard1P isSymStart, L.labelP "sym" (fmap AtomSym symP))
+        , (guard1P isNumStart, L.labelP "num" (fmap (either AtomInt AtomSci) L.numP))
+        , (guard1P isStringStart, L.labelP "str" (fmap AtomStr stringLitP))
+        , (guard1P isCharStart, L.labelP "char" (fmap AtomChar charLitP))
         ]
+  docP = do
+    doc <- docLinesP
+    fmap (SexpDocF doc) rootP
+
+-- * Recognizer
 
 data X e s = X !(Maybe e) !s
 
@@ -284,6 +378,8 @@ data RecogElem
   | RecogElemChar
   | RecogElemComment
   | RecogElemSlashEsc
+  | RecogElemQuote
+  | RecogElemUnquote
   | RecogElemBrace !Brace
   deriving stock (Eq, Ord, Show)
 
@@ -338,6 +434,8 @@ stepR c = goRet
       Just RecogElemChar -> goChar
       Just RecogElemComment -> goComment
       Just RecogElemSlashEsc -> goSlashEsc
+      Just RecogElemQuote -> goQuote
+      Just RecogElemUnquote -> goUnquote
       Just (RecogElemBrace b) -> goDefault (Just b)
       Nothing -> goDefault Nothing
   goString = case readCharCase c of
@@ -352,6 +450,8 @@ stepR c = goRet
     Just CharCaseNewline -> popStack
     _ -> pure ()
   goSlashEsc = popStack -- just ignore input and leave slash esc mode
+  goQuote = error "TODO"
+  goUnquote = error "TODO"
   goDefault mb = case readCharCase c of
     Just CharCaseDoubleQuote -> pushStack RecogElemString
     Just CharCaseSingleQuote -> pushStack RecogElemChar
