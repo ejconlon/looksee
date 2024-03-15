@@ -8,8 +8,8 @@ allow-newer-deps:
 
 packages:
 - looksee
-- looksee-sexp
 - looksee-trip
+- mello
 
 extra-deps:
 - bowtie-0.2.0

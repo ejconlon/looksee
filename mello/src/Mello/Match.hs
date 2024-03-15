@@ -1,6 +1,6 @@
 {-# LANGUAGE UndecidableInstances #-}
 
-module Looksee.Match
+module Mello.Match
   ( MatchErr (..)
   , LocMatchErr (..)
   , MatchT
@@ -42,7 +42,7 @@ import Data.Scientific (Scientific)
 import Data.Sequence (Seq (..))
 import Data.Sequence qualified as Seq
 import Data.Text (Text)
-import Looksee.Sexp (Atom (..), AtomType (..), Brace, SexpF (..), SexpType (..), Symbol (..))
+import Mello.Syntax (Atom (..), AtomType (..), Brace, SexpF (..), SexpType (..), Symbol (..))
 
 data MatchErr e r
   = MatchErrType !SexpType

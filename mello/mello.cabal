@@ -4,9 +4,9 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 
-name:           looksee-sexp
+name:           mello
 version:        0.6.0
-synopsis:       A simple text parser with decent errors
+synopsis:       No-fuss syntax with s-expressions
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 category:       Parsing
 homepage:       https://github.com/ejconlon/looksee#readme
@@ -27,10 +27,13 @@ source-repository head
 
 library
   exposed-modules:
-      Looksee.Match
-      Looksee.Sexp
+      Mello.Match
+      Mello.Parse
+      Mello.Recognize
+      Mello.Syntax
+      Mello.Text
   other-modules:
-      Paths_looksee_sexp
+      Paths_mello
   hs-source-dirs:
       src
   default-extensions:
@@ -78,7 +81,7 @@ test-suite looksee-sexp-test
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
-      Paths_looksee_sexp
+      Paths_mello
   hs-source-dirs:
       test
   default-extensions:
@@ -116,8 +119,8 @@ test-suite looksee-sexp-test
     , daytripper
     , foldl ==1.4.*
     , looksee ==0.6.*
-    , looksee-sexp
     , looksee-trip
+    , mello
     , mtl >=2.3 && <2.5
     , prettyprinter ==1.7.*
     , recursion-schemes ==5.2.*

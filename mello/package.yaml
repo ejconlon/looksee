@@ -1,4 +1,4 @@
-name: looksee-sexp
+name: mello
 version: 0.6.0
 
 github: ejconlon/looksee
@@ -6,7 +6,7 @@ license: BSD3
 author: Eric Conlon
 maintainer: ejconlon@gmail.com
 copyright: (c) 2023 Eric Conlon
-synopsis: A simple text parser with decent errors
+synopsis: No-fuss syntax with s-expressions
 description: Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 tested-with: GHC == 9.6.4
 category: Parsing
@@ -41,7 +41,7 @@ tests:
     - -rtsopts
     - -with-rtsopts=-N
     dependencies:
-    - looksee-sexp
+    - mello
     - looksee-trip
     - daytripper
     - tasty >= 1.4.3 && < 1.5

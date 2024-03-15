@@ -1,5 +1,5 @@
 stack_build := "stack build --fast"
-src_dirs := "looksee looksee-sexp looksee-trip"
+src_dirs := "looksee looksee-trip mello"
 
 # No default tasks
 default:
@@ -20,6 +20,10 @@ build target="":
 # Enter repl
 repl target="":
   stack ghci --test --ghci-options "-XOverloadedStrings -XOverloadedLists" {{ target }}
+
+# Clean stack work
+clean:
+  stack clean --full
 
 # Open browser with generated docs
 docs:

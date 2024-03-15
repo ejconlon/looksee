@@ -6,12 +6,12 @@ module Main (main) where
 import Bowtie (unMkMemo)
 import Data.Text (Text)
 import Data.Void (Void)
-import Looksee.Sexp
+import Mello.Parse (sexpParser)
+import Mello.Syntax
   ( Atom (..)
   , Brace (..)
   , Doc (..)
   , Sexp
-  , sexpParser
   , pattern SexpAtom
   , pattern SexpDoc
   , pattern SexpList
