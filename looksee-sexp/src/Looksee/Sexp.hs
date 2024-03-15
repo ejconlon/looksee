@@ -77,6 +77,49 @@ data Atom
   | AtomChar !Char
   deriving stock (Eq, Ord, Show)
 
+atomNotNumErr :: a
+atomNotNumErr = error "Atom not num"
+
+-- It's a sin to define an instance this partial but it's really
+-- useful to have literal syntax.
+instance Num Atom where
+  (+) = \case
+    AtomInt x -> \case
+      AtomInt y -> AtomInt (x + y)
+      AtomSci y -> AtomSci (fromIntegral x + y)
+      _ -> atomNotNumErr
+    AtomSci x -> \case
+      AtomInt y -> AtomSci (x + fromIntegral y)
+      AtomSci y -> AtomSci (x + y)
+      _ -> atomNotNumErr
+    _ -> atomNotNumErr
+  (*) = \case
+    AtomInt x -> \case
+      AtomInt y -> AtomInt (x * y)
+      AtomSci y -> AtomSci (fromIntegral x * y)
+      _ -> atomNotNumErr
+    AtomSci x -> \case
+      AtomInt y -> AtomSci (x * fromIntegral y)
+      AtomSci y -> AtomSci (x * y)
+      _ -> atomNotNumErr
+    _ -> atomNotNumErr
+  negate = \case
+    AtomInt x -> AtomInt (negate x)
+    AtomSci x -> AtomSci (negate x)
+    _ -> atomNotNumErr
+  abs = \case
+    AtomInt x -> AtomInt (abs x)
+    AtomSci x -> AtomSci (abs x)
+    _ -> atomNotNumErr
+  signum = \case
+    AtomInt x -> AtomInt (signum x)
+    AtomSci x -> AtomSci (signum x)
+    _ -> atomNotNumErr
+  fromInteger = AtomInt
+
+instance IsString Atom where
+  fromString = AtomSym . fromString
+
 instance Pretty Atom where
   pretty = \case
     AtomSym x -> pretty x
@@ -143,6 +186,35 @@ data SexpF r
   | SexpDocF !Doc r
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
+sexpNotNumErr :: a
+sexpNotNumErr = error "Sexp not num"
+
+-- Again, bad instance, but nice to have literal syntax
+instance Num (SexpF a) where
+  (+) = \case
+    SexpAtomF x -> \case
+      SexpAtomF y -> SexpAtomF (x + y)
+      _ -> sexpNotNumErr
+    _ -> sexpNotNumErr
+  (*) = \case
+    SexpAtomF x -> \case
+      SexpAtomF y -> SexpAtomF (x * y)
+      _ -> sexpNotNumErr
+    _ -> sexpNotNumErr
+  negate = \case
+    SexpAtomF x -> SexpAtomF (negate x)
+    _ -> sexpNotNumErr
+  abs = \case
+    SexpAtomF x -> SexpAtomF (abs x)
+    _ -> sexpNotNumErr
+  signum = \case
+    SexpAtomF x -> SexpAtomF (signum x)
+    _ -> sexpNotNumErr
+  fromInteger = SexpAtomF . fromInteger
+
+instance IsString (SexpF r) where
+  fromString = SexpAtomF . fromString
+
 instance (Pretty r) => Pretty (SexpF r) where
   pretty = \case
     SexpAtomF a -> pretty a
@@ -152,11 +224,14 @@ instance (Pretty r) => Pretty (SexpF r) where
     SexpDocF (Doc d) r ->
       case d of
         Empty -> pretty r
-        _ -> P.hcat (toList (fmap (\y -> ";|" <> pretty y <> "\n") d :|> pretty r))
+        h :<| t ->
+          let h' = (";|" <> pretty h <> "\n")
+              t' = fmap (\x -> ";" <> pretty x <> "\n") t
+          in  P.hcat (toList (h' :<| (t' :|> pretty r)))
 
 newtype Sexp = Sexp {unSexp :: SexpF Sexp}
   deriving stock (Show)
-  deriving newtype (Eq, Ord, Pretty)
+  deriving newtype (Eq, Ord, Num, IsString, Pretty)
 
 type instance Base Sexp = SexpF
 
@@ -357,7 +432,7 @@ sexpParser = stripP rootP
     L.charP_ (closeBraceChar b)
     pure (SexpListF b ss)
   quoteP = L.charP_ '`' *> fmap SexpQuoteF rootP
-  unquoteP = L.charP_ ',' *> fmap SexpQuoteF rootP
+  unquoteP = L.charP_ ',' *> fmap SexpUnquoteF rootP
   atomP =
     SexpAtomF
       <$> L.commitP
