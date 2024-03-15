@@ -791,7 +791,7 @@ main :: IO ()
 main =
   defaultMain $
     testGroup
-      "Looksee"
+      "looksee"
       [ testBasic
       , testSpan
       , testSplitBind

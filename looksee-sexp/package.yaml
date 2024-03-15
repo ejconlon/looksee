@@ -32,3 +32,18 @@ dependencies:
 library:
   source-dirs: src
 
+tests:
+  looksee-sexp-test:
+    main: Main.hs
+    source-dirs: test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - looksee-sexp
+    - looksee-trip
+    - daytripper
+    - tasty >= 1.4.3 && < 1.5
+    - tasty-hunit >= 0.10 && < 0.11
+

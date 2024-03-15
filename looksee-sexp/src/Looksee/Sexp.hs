@@ -151,7 +151,7 @@ instance (Pretty r) => Pretty (SexpF r) where
 
 newtype Sexp = Sexp {unSexp :: SexpF Sexp}
   deriving stock (Show)
-  deriving newtype (Eq, Ord)
+  deriving newtype (Eq, Ord, Pretty)
 
 type instance Base Sexp = SexpF
 

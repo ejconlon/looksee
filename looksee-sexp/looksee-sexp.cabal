@@ -73,3 +73,56 @@ library
     , scientific ==0.3.*
     , text ==2.0.*
   default-language: GHC2021
+
+test-suite looksee-sexp-test
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      Paths_looksee_sexp
+  hs-source-dirs:
+      test
+  default-extensions:
+      BangPatterns
+      ConstraintKinds
+      DataKinds
+      DeriveFunctor
+      DeriveFoldable
+      DeriveGeneric
+      DeriveTraversable
+      DerivingStrategies
+      DerivingVia
+      FlexibleContexts
+      FlexibleInstances
+      FunctionalDependencies
+      GADTs
+      GeneralizedNewtypeDeriving
+      LambdaCase
+      KindSignatures
+      MultiParamTypeClasses
+      MultiWayIf
+      PatternSynonyms
+      Rank2Types
+      ScopedTypeVariables
+      StandaloneDeriving
+      TupleSections
+      TypeApplications
+      TypeOperators
+      TypeFamilies
+  ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.12 && <5
+    , bowtie ==0.2.*
+    , containers ==0.6.*
+    , daytripper
+    , foldl ==1.4.*
+    , looksee ==0.6.*
+    , looksee-sexp
+    , looksee-trip
+    , mtl >=2.3 && <2.5
+    , prettyprinter ==1.7.*
+    , recursion-schemes ==5.2.*
+    , scientific ==0.3.*
+    , tasty >=1.4.3 && <1.5
+    , tasty-hunit ==0.10.*
+    , text ==2.0.*
+  default-language: GHC2021

@@ -5,21 +5,21 @@ src_dirs := "looksee looksee-sexp looksee-trip"
 default:
   just --list
 
+# Build and run tests on file change
+watch target="":
+  {{ stack_build }} --test --file-watch {{ target }}
+
 # Build and run tests
-test:
-  {{ stack_build }} --test
+test target="":
+  {{ stack_build }} --test {{ target }}
 
 # Build only
-build:
-  {{ stack_build }} --test --no-run-tests
-
-# Clean stack work
-clean:
-  stack clean --full
+build target="":
+  {{ stack_build }} --test --no-run-tests {{ target }}
 
 # Enter repl
-ghci:
-  stack ghci --test --ghci-options "-XOverloadedStrings"
+repl target="":
+  stack ghci --test --ghci-options "-XOverloadedStrings -XOverloadedLists" {{ target }}
 
 # Open browser with generated docs
 docs:
