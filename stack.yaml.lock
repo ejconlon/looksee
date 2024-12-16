@@ -5,29 +5,29 @@
 
 packages:
 - completed:
-    hackage: daytripper-0.3.1@sha256:225a6e9348c2b5b6e0a55d408559b55df06f1365d5741d2f9d1856d8632769ae,2985
+    hackage: daytripper-0.4.0@sha256:e0c26f81ba199aebe6df4c08f09c8316ec2cd32614ba74032a12b758640872cd,3038
     pantry-tree:
-      sha256: 5b714aec8cd526cec33a5b269f332d59fe8587e20cb83af9a5e7c3b53ddde351
+      sha256: 71d0f7be3e9273ee3ab474735d49ef1206db5d6fa026591c0f13c77b8cb632d1
       size: 225
   original:
-    hackage: daytripper-0.3.1
+    hackage: daytripper-0.4.0
 - completed:
-    hackage: errata-0.4.0.2@sha256:47e14aee64dd54dbfd25984423b66c15dcf2c7526d39ee06e60b1f6dab6bb3bc,2386
+    hackage: errata-0.4.0.3@sha256:b66989752fd374d984a7a35ef22b7057791aef33cf4191a5cc467f412f7669a7,2335
     pantry-tree:
-      sha256: 672be5899d51c056033b12b8bc109f788ce30c8680cf3bcbcd83f1a6962ba110
+      sha256: 114c70d54397199672d8523c61b5c40e8402263e74353b6c863c1f82084b1b4d
       size: 809
   original:
-    hackage: errata-0.4.0.2
+    hackage: errata-0.4.0.3
 - completed:
-    hackage: falsify-0.2.0@sha256:82ad5e999a80bf9e7a5bcb2fe17c2b9524a95893ff19fcdbf3ef4a671303e444,5451
+    hackage: prop-unit-0.2.0@sha256:a2cfe8027343565ba577e3ea4c978b18c376e946cb304f39ebeff2c373af4598,2957
     pantry-tree:
-      sha256: 94ee859a00223f18c04e5ee0135ca81e50a47d75d23f2084ae3b5784c1d62c2e
-      size: 3378
+      sha256: b0f2b5ded48abfcb3aad0e8d0c9ea39c5117e286a0a163cd14dfb804d80a9eed
+      size: 264
   original:
-    hackage: falsify-0.2.0
+    hackage: prop-unit-0.2.0
 snapshots:
 - completed:
-    sha256: 6f0bea3ba5b07360f25bc886e8cff8d847767557a492a6f7f6dcb06e3cc79ee9
-    size: 712905
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/22/13.yaml
-  original: lts-22.13
+    sha256: 9444fadfa30b67a93080254d53872478c087592ad64443e47c546cdcd13149ae
+    size: 678857
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/23/0.yaml
+  original: lts-23.0

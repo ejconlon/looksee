@@ -1,5 +1,5 @@
 name: looksee-trip
-version: 0.6.0
+version: 0.7.0
 
 github: ejconlon/looksee
 license: BSD3
@@ -8,7 +8,7 @@ maintainer: ejconlon@gmail.com
 copyright: (c) 2023 Eric Conlon
 synopsis: A simple text parser with decent errors
 description: Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
-tested-with: GHC == 9.6.3
+tested-with: GHC == 9.8.4
 category: Parsing
 
 defaults:
@@ -19,10 +19,11 @@ extra-source-files:
 
 dependencies:
 - base >= 4.12 && < 5
-- daytripper >= 0.3 && < 0.4
-- looksee >= 0.6 && < 0.7
+- daytripper >= 0.4 && < 0.5
+- looksee >= 0.7 && < 0.8
 - prettyprinter >= 1.7 && < 1.8
-- text >= 2.0 && < 2.1
+- prop-unit >= 0.2 && < 0.3
+- text >= 2.0 && < 2.2
 
 library:
   source-dirs: src

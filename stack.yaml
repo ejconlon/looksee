@@ -1,4 +1,4 @@
-resolver: lts-22.13
+resolver: lts-23.0
 
 ghc-options:
   "$everything": -haddock
@@ -8,7 +8,7 @@ packages:
 - looksee-trip
 
 extra-deps:
-- daytripper-0.3.1
-- errata-0.4.0.2
-- falsify-0.2.0@r1
+- daytripper-0.4.0
+- errata-0.4.0.3
+- prop-unit-0.2.0
 

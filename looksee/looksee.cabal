@@ -1,11 +1,11 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.36.0.
+-- This file has been generated from package.yaml by hpack version 0.37.0.
 --
 -- see: https://github.com/sol/hpack
 
 name:           looksee
-version:        0.6.0
+version:        0.7.0
 synopsis:       A simple text parser with decent errors
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 category:       Parsing
@@ -17,7 +17,7 @@ copyright:      (c) 2023 Eric Conlon
 license:        BSD3
 build-type:     Simple
 tested-with:
-    GHC == 9.6.4
+    GHC == 9.8.4
 extra-source-files:
     README.md
 
@@ -70,7 +70,7 @@ library
     , mtl >=2.2 && <2.4
     , recursion-schemes ==5.2.*
     , scientific ==0.3.*
-    , text >=1.2 && <2.1
+    , text >=1.2 && <2.2
     , vector >=0.12 && <0.14
   default-language: GHC2021
 
@@ -119,8 +119,8 @@ test-suite looksee-test
     , mtl >=2.2 && <2.4
     , recursion-schemes ==5.2.*
     , scientific ==0.3.*
-    , tasty >=1.4.3 && <1.5
+    , tasty >=1.4.3 && <1.6
     , tasty-hunit ==0.10.*
-    , text >=1.2 && <2.1
+    , text >=1.2 && <2.2
     , vector >=0.12 && <0.14
   default-language: GHC2021

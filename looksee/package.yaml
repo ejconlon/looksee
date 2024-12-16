@@ -1,5 +1,5 @@
 name: looksee
-version: 0.6.0
+version: 0.7.0
 
 github: ejconlon/looksee
 license: BSD3
@@ -8,7 +8,7 @@ maintainer: ejconlon@gmail.com
 copyright: (c) 2023 Eric Conlon
 synopsis: A simple text parser with decent errors
 description: Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
-tested-with: GHC == 9.6.4
+tested-with: GHC == 9.8.4
 category: Parsing
 
 defaults:
@@ -26,7 +26,7 @@ dependencies:
 - mtl >= 2.2 && < 2.4
 - recursion-schemes >= 5.2 && < 5.3
 - scientific >= 0.3 && < 0.4
-- text >= 1.2 && < 2.1
+- text >= 1.2 && < 2.2
 - vector >= 0.12 && < 0.14
 
 library:
@@ -42,6 +42,6 @@ tests:
     - -with-rtsopts=-N
     dependencies:
     - looksee
-    - tasty >= 1.4.3 && < 1.5
+    - tasty >= 1.4.3 && < 1.6
     - tasty-hunit >= 0.10 && < 0.11
 
