@@ -1,5 +1,5 @@
 name: looksee-trip
-version: 0.7.0
+version: 0.8.0
 
 github: ejconlon/looksee
 license: BSD3
@@ -19,10 +19,10 @@ extra-source-files:
 
 dependencies:
 - base >= 4.12 && < 5
-- daytripper >= 0.4 && < 0.5
-- looksee >= 0.7 && < 0.8
+- daytripper >= 1.0 && < 1.1
+- looksee >= 0.8 && < 0.9
 - prettyprinter >= 1.7 && < 1.8
-- prop-unit >= 0.2 && < 0.3
+- prop-unit >= 1.0.1 && < 1.1
 - text >= 2.0 && < 2.2
 
 library:

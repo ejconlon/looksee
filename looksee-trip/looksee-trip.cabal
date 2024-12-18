@@ -5,7 +5,7 @@ cabal-version: 1.12
 -- see: https://github.com/sol/hpack
 
 name:           looksee-trip
-version:        0.7.0
+version:        0.8.0
 synopsis:       A simple text parser with decent errors
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 category:       Parsing
@@ -62,9 +62,9 @@ library
   ghc-options: -Wall -Wcompat -Widentities -Wincomplete-record-updates -Wincomplete-uni-patterns -Wpartial-fields -Wredundant-constraints -fno-warn-unused-top-binds
   build-depends:
       base >=4.12 && <5
-    , daytripper ==0.4.*
-    , looksee ==0.7.*
+    , daytripper ==1.0.*
+    , looksee ==0.8.*
     , prettyprinter ==1.7.*
-    , prop-unit ==0.2.*
+    , prop-unit >=1.0.1 && <1.1
     , text >=2.0 && <2.2
   default-language: GHC2021

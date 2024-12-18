@@ -8,7 +8,7 @@ packages:
 - looksee-trip
 
 extra-deps:
-- daytripper-0.4.0
+- daytripper-1.0.0
 - errata-0.4.0.3
-- prop-unit-0.2.0
+- prop-unit-1.0.1
 
