@@ -1,11 +1,11 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.37.0.
+-- This file has been generated from package.yaml by hpack version 0.38.0.
 --
 -- see: https://github.com/sol/hpack
 
 name:           looksee
-version:        0.8.0
+version:        0.8.1
 synopsis:       A simple text parser with decent errors
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 category:       Parsing
@@ -29,6 +29,7 @@ library
   exposed-modules:
       Looksee
       Looksee.Examples
+      Looksee.Lexer
   other-modules:
       Paths_looksee
   hs-source-dirs:
