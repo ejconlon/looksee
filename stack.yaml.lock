@@ -5,12 +5,12 @@
 
 packages:
 - completed:
-    hackage: daytripper-1.0.0@sha256:ad21982bd08e4d5f542ed81020d34c4f0e8ff628b7e559a542c549ac7bbcb2c4,3031
+    hackage: daytripper-1.0.1@sha256:bd1492d68b51291690e3341fc69d444ec885351bb8d8cc7f91f0e83ec8c798be,3031
     pantry-tree:
-      sha256: c850279a8bd2fa79fc9da7021bc8e11dc403ea231f169da249dc318299a5c7be
+      sha256: 404e0ba35bcbab23ac0fe804d0d710b330630af3c1de60ec9229a34dedddef54
       size: 225
   original:
-    hackage: daytripper-1.0.0
+    hackage: daytripper-1.0.1
 - completed:
     hackage: errata-0.4.0.3@sha256:b66989752fd374d984a7a35ef22b7057791aef33cf4191a5cc467f412f7669a7,2335
     pantry-tree:
