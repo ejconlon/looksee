@@ -314,9 +314,9 @@ instance MonadTrans (T e) where
 instance MFunctor (T e) where
   hoist mn (T x) = T (hoist (hoist mn) x)
 
-deriving instance (MonadReader r m) => MonadReader r (T e m)
+deriving newtype instance (MonadReader r m) => MonadReader r (T e m)
 
-deriving instance (MonadWriter w m) => MonadWriter w (T e m)
+deriving newtype instance (MonadWriter w m) => MonadWriter w (T e m)
 
 -- private
 runT :: T e m a -> St -> m (Either (Err e) a, St)
