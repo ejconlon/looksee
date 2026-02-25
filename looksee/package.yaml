@@ -1,5 +1,5 @@
 name: looksee
-version: 0.8.2
+version: 0.8.3
 
 github: ejconlon/looksee
 license: BSD3
@@ -20,6 +20,7 @@ extra-source-files:
 dependencies:
 - base >= 4.12 && < 5
 - bifunctors >= 5.5 && < 5.7
+- hashable >= 1.4 && < 1.6
 - containers >= 0.6 && < 0.8
 - errata >= 0.4.0.1 && < 0.5
 - mmorph >= 1.2 && < 1.3

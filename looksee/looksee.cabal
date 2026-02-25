@@ -5,7 +5,7 @@ cabal-version: 1.12
 -- see: https://github.com/sol/hpack
 
 name:           looksee
-version:        0.8.2
+version:        0.8.3
 synopsis:       A simple text parser with decent errors
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 category:       Parsing
@@ -67,6 +67,7 @@ library
     , bifunctors >=5.5 && <5.7
     , containers >=0.6 && <0.8
     , errata >=0.4.0.1 && <0.5
+    , hashable >=1.4 && <1.6
     , mmorph ==1.2.*
     , mtl >=2.2 && <2.4
     , recursion-schemes ==5.2.*
@@ -115,6 +116,7 @@ test-suite looksee-test
     , bifunctors >=5.5 && <5.7
     , containers >=0.6 && <0.8
     , errata >=0.4.0.1 && <0.5
+    , hashable >=1.4 && <1.6
     , looksee
     , mmorph ==1.2.*
     , mtl >=2.2 && <2.4

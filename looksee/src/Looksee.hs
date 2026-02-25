@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -101,6 +102,8 @@ module Looksee
   )
 where
 
+import Data.Hashable (Hashable)
+import GHC.Generics (Generic)
 import Control.Applicative (Alternative (..))
 import Control.Exception (Exception)
 import Control.Monad (ap, void)
@@ -141,7 +144,8 @@ import System.IO (stderr)
 
 -- | A generic span, used for tracking ranges of offsets or (line, col)
 data Span a = Span {spanStart :: !a, spanEnd :: !a}
-  deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
+  deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable, Generic)
+  deriving anyclass (Hashable)
 
 -- | Auxiliary data structure to translate offsets to (line, col)
 type LineColLookup = Vector (Int, Int)
