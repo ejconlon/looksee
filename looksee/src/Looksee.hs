@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -101,6 +102,8 @@ module Looksee
   )
 where
 
+import Data.Hashable (Hashable)
+import GHC.Generics (Generic)
 import Control.Applicative (Alternative (..))
 import Control.Exception (Exception)
 import Control.Monad (ap, void)
@@ -141,7 +144,8 @@ import System.IO (stderr)
 
 -- | A generic span, used for tracking ranges of offsets or (line, col)
 data Span a = Span {spanStart :: !a, spanEnd :: !a}
-  deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
+  deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable, Generic)
+  deriving anyclass (Hashable)
 
 -- | Auxiliary data structure to translate offsets to (line, col)
 type LineColLookup = Vector (Int, Int)
@@ -310,9 +314,9 @@ instance MonadTrans (T e) where
 instance MFunctor (T e) where
   hoist mn (T x) = T (hoist (hoist mn) x)
 
-deriving instance (MonadReader r m) => MonadReader r (T e m)
+deriving newtype instance (MonadReader r m) => MonadReader r (T e m)
 
-deriving instance (MonadWriter w m) => MonadWriter w (T e m)
+deriving newtype instance (MonadWriter w m) => MonadWriter w (T e m)
 
 -- private
 runT :: T e m a -> St -> m (Either (Err e) a, St)
