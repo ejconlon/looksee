@@ -19,15 +19,15 @@ packages:
   original:
     hackage: errata-0.4.0.3
 - completed:
-    hackage: prop-unit-1.0.1@sha256:db1fdcc30294c15beff28cc62a5baf34a9d217bea3f3fa49720b406f3fc4e94b,3035
+    hackage: prop-unit-1.0.2@sha256:80e2ce717c14c5b6db3aa0e58615d8bb417089c54316aefe748f34243beee61e,3079
     pantry-tree:
-      sha256: 84c321efc37e92481c584086a5b85967b991ee5bb17b3db856221d6eef8480b1
+      sha256: c6c6ccf32f0a2324b5121251e25af53c3647d095b5c4beb7b374fa7b2ee58f21
       size: 466
   original:
-    hackage: prop-unit-1.0.1
+    hackage: prop-unit-1.0.2
 snapshots:
 - completed:
-    sha256: d141b089a21d9873b5febdf7c53296fb799b7fb602b9d3b003c022a81cc1cc01
-    size: 726795
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/24/30.yaml
-  original: lts-24.30
+    sha256: 53ca0201488b1213f9c4215808984f82686a1ec047c696c01d6b1b498d70869c
+    size: 753583
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2026/5/27.yaml
+  original: nightly-2026-05-27
