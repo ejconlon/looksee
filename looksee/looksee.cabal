@@ -80,6 +80,8 @@ test-suite looksee-test
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
+      Test.Looksee.Scala.Parse
+      Test.Looksee.Scala.Syntax
       Paths_looksee
   hs-source-dirs:
       test

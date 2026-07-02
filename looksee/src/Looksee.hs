@@ -5,10 +5,8 @@
 
 -- | A simple text parser with decent errors
 module Looksee
-  ( Span (..)
-  , LineColLookup ()
-  , calculateLineCol
-  , lookupLineCol
+  ( Pos (..)
+  , Span (..)
   , Label (..)
   , textSpan
   , Reason (..)
@@ -93,6 +91,13 @@ module Looksee
   , stripP
   , stripStartP
   , stripEndP
+  , indentAtP
+  , indentBlockP
+  , indentBlockEndByP
+  , indentedAfterP
+  , indentBlockAfterP
+  , indentBlockEndByAfterP
+  , indentedOrInlineP
   , measureP
   , unconsP
   , headP
@@ -143,6 +148,8 @@ import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
 import Data.Hashable (Hashable)
 import Data.IntMap.Strict (IntMap)
 import Data.IntMap.Strict qualified as IntMap
+import Data.IntSet (IntSet)
+import Data.IntSet qualified as IntSet
 import Data.Maybe (fromMaybe)
 import Data.Ratio ((%))
 import Data.Scientific (Scientific)
@@ -155,8 +162,6 @@ import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Text.Lazy qualified as TL
 import Data.Typeable (Typeable)
-import Data.Vector (Vector)
-import Data.Vector qualified as V
 import Data.Void (Void, absurd)
 import Errata qualified as E
 import Errata.Styles qualified as E
@@ -164,7 +169,19 @@ import Errata.Types qualified as E
 import GHC.Generics (Generic)
 import System.IO (stderr)
 
--- | A generic half-open span, used for tracking ranges of offsets or (line, column) positions.
+-- | A position in the parsed document.
+data Pos = Pos
+  { posOffset :: !Int
+  -- ^ 0-based character offset.
+  , posLine :: !Int
+  -- ^ 0-based line number.
+  , posColumn :: !Int
+  -- ^ 0-based column number.
+  }
+  deriving stock (Eq, Ord, Show, Generic)
+  deriving anyclass (Hashable)
+
+-- | A generic half-open span, used for tracking ranges of offsets or positions.
 data Span a = Span
   { spanStart :: !a
   -- ^ Inclusive start of the span.
@@ -174,28 +191,26 @@ data Span a = Span
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable, Generic)
   deriving anyclass (Hashable)
 
--- | Auxiliary data structure to translate offsets to (line, col)
-type LineColLookup = Vector (Int, Int)
+-- | Auxiliary data structure to translate offsets to positions.
+type LineColLookup = IntSet
 
--- | Construct an offset lookup from a document
+-- | Construct a newline-offset lookup from a document.
 calculateLineCol :: Text -> LineColLookup
-calculateLineCol t = V.unfoldrN (T.length t) go ((0, 0), T.unpack t)
+calculateLineCol = snd . T.foldl' go (0, IntSet.empty)
  where
-  go (p@(!line, !col), xs) =
-    case xs of
-      [] -> Nothing
-      x : xs' -> Just (p, if x == '\n' then ((line + 1, 0), xs') else ((line, col + 1), xs'))
+  go (!offset, !lineBreaks) c =
+    let lineBreaks' = if c == '\n' then IntSet.insert offset lineBreaks else lineBreaks
+    in  (offset + 1, lineBreaks')
 
 -- | Returns 0-based (line, col) for the given offset.
--- Clamps to the valid range of offsets, returning (0, 0) for
--- empty text. Note that the valid range is from before the first
--- character to before the last, so a 3 character string has
--- three valid offsets (0, 1, and 2).
-lookupLineCol :: Int -> LineColLookup -> (Int, Int)
-lookupLineCol i v =
-  if V.null v
-    then (0, 0)
-    else v V.! max 0 (min i (V.length v - 1))
+-- Clamps negative offsets to 0.
+posAt :: Int -> LineColLookup -> Pos
+posAt offset0 lineBreaks =
+  let offset = max 0 offset0
+      (before, _) = IntSet.split offset lineBreaks
+      line = IntSet.size before
+      columnStart = maybe 0 ((+ 1) . fst) (IntSet.maxView before)
+  in  Pos offset line (offset - columnStart)
 
 -- | A parser label used in error reporting.
 newtype Label = Label
@@ -205,15 +220,24 @@ newtype Label = Label
   deriving stock (Show)
   deriving newtype (Eq, Ord, IsString)
 
--- | Create a span from the given text
-textSpan :: Text -> Span Int
-textSpan t = Span 0 (T.length t)
+-- | Create a position span from the given text.
+textSpan :: Text -> Span Pos
+textSpan t = textSpanWithLookup t (calculateLineCol t)
+
+-- private
+textSpanWithLookup :: Text -> LineColLookup -> Span Pos
+textSpanWithLookup t lookup0 = Span (posAt 0 lookup0) (posAt (T.length t) lookup0)
+
+-- private
+textOffsetSpan :: Text -> Span Int
+textOffsetSpan t = Span 0 (T.length t)
 
 -- private
 -- Parser state
 data St = St
   { stHay :: !Text
   , stSpan :: !(Span Int)
+  , stLineCol :: !LineColLookup
   , stLabels :: !(Seq Label)
   }
   deriving stock (Eq, Ord, Show)
@@ -256,6 +280,8 @@ data Reason e r
     ReasonLeftover !Int
   | -- | A non-associative Pratt operator was chained at the given precedence.
     ReasonNonAssoc !Int
+  | -- | Expected indentation column and actual indentation column found.
+    ReasonIndent !Int !Int
   | -- | Failure produced by 'MonadFail'.
     ReasonFail !Text
   | -- | Underlying error annotated with a parser label.
@@ -274,7 +300,7 @@ deriveBitraversable ''Reason
 
 -- | Base functor for Err containing the range and reason for the error.
 data ErrF e r = ErrF
-  { efSpan :: !(Span Int)
+  { efSpan :: !(Span Pos)
   -- ^ Character offset span covered by the error.
   , efReason :: !(Reason e r)
   -- ^ Structured reason for the error.
@@ -318,7 +344,7 @@ instance Corecursive (Err e) where
   embed = Err
 
 -- | Span of a parse error
-errSpan :: Err e -> Span Int
+errSpan :: Err e -> Span Pos
 errSpan = efSpan . unErr
 
 -- | Reason for a parse error
@@ -345,7 +371,7 @@ runT = runStateT . runExceptT . unT
 
 -- private
 mkErrT :: (Monad m) => Reason e (Err e) -> T e m (Err e)
-mkErrT re = gets (\st -> Err (ErrF (stSpan st) re))
+mkErrT re = gets (\st -> Err (ErrF (offsetSpanToPos st (stSpan st)) re))
 
 -- | The parser monad transformer
 newtype ParserT e m a = ParserT {unParserT :: forall r. (Either (Err e) a -> T e m r) -> T e m r}
@@ -533,6 +559,22 @@ stateP :: (Monad m) => (St -> (a, St)) -> ParserT e m a
 stateP f = ParserT (\j -> state f >>= j . Right)
 
 -- private
+advanceStart :: Int -> St -> Span Int
+advanceStart delta st =
+  let r = stSpan st
+  in  r {spanStart = spanStart r + delta}
+
+-- private
+advanceStartToEnd :: St -> Span Int
+advanceStartToEnd st =
+  let r = stSpan st
+  in  r {spanStart = spanEnd r}
+
+-- private
+offsetSpanToPos :: St -> Span Int -> Span Pos
+offsetSpanToPos st (Span start end) = Span (posAt start (stLineCol st)) (posAt end (stLineCol st))
+
+-- private
 errP :: (Monad m) => Reason e (Err e) -> ParserT e m a
 errP re = ParserT (\j -> mkErrT re >>= j . Left)
 
@@ -544,7 +586,9 @@ leftoverP = getsP (\st -> let Span s e = stSpan st in e - s)
 -- If you really don't care about the rest of the input, you can always
 -- discard it with 'dropAllP'.
 parseT :: (Monad m) => ParserT e m a -> Text -> m (Either (Err e) a)
-parseT p h = fmap fst (finishParserT (p <* endP) (St h (textSpan h) Empty))
+parseT p h =
+  let lookup0 = calculateLineCol h
+  in  fmap fst (finishParserT (p <* endP) (St h (textOffsetSpan h) lookup0 Empty))
 
 -- | Run a parser (see 'parseT')
 parse :: Parser e a -> Text -> Either (Err e) a
@@ -559,17 +603,17 @@ parseI p h = do
     Right _ -> pure ()
   pure ea
 
--- | Get the span (in character offset) at the current point representing
--- the entire parseable range. At the start of parsing this will be `Span 0 n` for
+-- | Get the span at the current point representing
+-- the entire parseable range. At the start of parsing this will span offsets @0@ to @n@ for
 -- an @n@-character document. The start offset will increase as input is consumed,
 -- and the end offset will decrease as lookahead delimits the range. To evaluate
 -- the "real" range of characters consumed by a parser, construct a span with the
 -- starting offsets before and after executing a subparser (or use 'spanAroundP').
-spanP :: (Monad m) => ParserT e m (Span Int)
-spanP = getsP stSpan
+spanP :: (Monad m) => ParserT e m (Span Pos)
+spanP = getsP (\st -> offsetSpanToPos st (stSpan st))
 
 -- | Incorporate span information into a parsed object.
-spanAroundP :: (Monad m) => (Span Int -> a -> b) -> ParserT e m a -> ParserT e m b
+spanAroundP :: (Monad m) => (Span Pos -> a -> b) -> ParserT e m a -> ParserT e m b
 spanAroundP f p = do
   Span start _ <- spanP
   a <- p
@@ -610,7 +654,7 @@ explainP f (ParserT g) = ParserT $ \j -> g $ \ea ->
       case f re of
         Nothing -> j ea
         Just (msg, hide) -> do
-          sp <- gets stSpan
+          sp <- gets (\st -> offsetSpanToPos st (stSpan st))
           let hide' = if hide then HideErrorYes else HideErrorNo
           let e' = Err (ErrF sp (ReasonExplained msg hide' e))
           j (Left e')
@@ -684,8 +728,7 @@ someCharP chars0 = do
               Just (c, h') ->
                 if c `elem` chars
                   then
-                    let r = stSpan st
-                        r' = r {spanStart = spanStart r + 1}
+                    let r' = advanceStart 1 st
                         st' = st {stHay = h', stSpan = r'}
                     in  (Just c, st')
                   else (Nothing, st)
@@ -840,8 +883,7 @@ takeP i = stateP $ \st ->
   let h = stHay st
       (o, h') = T.splitAt i h
       l = T.length o
-      r = stSpan st
-      r' = r {spanStart = spanStart r + l}
+      r' = advanceStart l st
       st' = st {stHay = h', stSpan = r'}
   in  (T.copy o, st')
 
@@ -852,8 +894,7 @@ takeExactP i = do
     let h = stHay st
         (o, h') = T.splitAt i h
         l = T.length o
-        r = stSpan st
-        r' = r {spanStart = spanStart r + T.length o}
+        r' = advanceStart (T.length o) st
         st' = st {stHay = h', stSpan = r'}
     in  if l == i then (Right (T.copy o), st') else (Left l, st)
   case et of
@@ -875,8 +916,7 @@ takeWhileP f = stateP $ \st ->
       o = T.takeWhile f h
       l = T.length o
       h' = T.drop l h
-      r = stSpan st
-      r' = r {spanStart = spanStart r + l}
+      r' = advanceStart l st
       st' = st {stHay = h', stSpan = r'}
   in  (T.copy o, st')
 
@@ -888,8 +928,7 @@ takeWhile1P f = do
         o = T.takeWhile f h
         l = T.length o
         h' = T.drop l h
-        r = stSpan st
-        r' = r {spanStart = spanStart r + l}
+        r' = advanceStart l st
         st' = st {stHay = h', stSpan = r'}
     in  if l == 0 then (Nothing, st) else (Just (T.copy o), st')
   case mt of
@@ -908,8 +947,7 @@ dropWhile1P = fmap T.length . takeWhile1P
 takeAllP :: (Monad m) => ParserT e m Text
 takeAllP = stateP $ \st ->
   let h = stHay st
-      r = stSpan st
-      r' = r {spanStart = spanEnd r}
+      r' = advanceStartToEnd st
       st' = st {stHay = T.empty, stSpan = r'}
   in  (T.copy h, st')
 
@@ -918,8 +956,7 @@ takeAll1P :: (Monad m) => ParserT e m Text
 takeAll1P = do
   mt <- stateP $ \st ->
     let h = stHay st
-        r = stSpan st
-        r' = r {spanStart = spanEnd r}
+        r' = advanceStartToEnd st
         st' = st {stHay = T.empty, stSpan = r'}
     in  if T.null h then (Nothing, st) else (Just (T.copy h), st')
   case mt of
@@ -1062,6 +1099,82 @@ stripStartP p = spaceP *> p
 stripEndP :: (Monad m) => ParserT e m a -> ParserT e m a
 stripEndP p = p <* spaceP
 
+-- private
+currentColumnP :: (Monad m) => ParserT e m Int
+currentColumnP = getsP (\st -> posColumn (posAt (spanStart (stSpan st)) (stLineCol st)))
+
+-- private
+indentColumnP :: (Monad m) => ParserT e m () -> ParserT e m Int
+indentColumnP indentation = indentation *> currentColumnP
+
+-- | Consume indentation and require it to end at the supplied 0-based column.
+indentAtP :: (Monad m) => Int -> ParserT e m () -> ParserT e m ()
+indentAtP column indentation = do
+  actual <- indentColumnP indentation
+  if actual == column
+    then pure ()
+    else errP (ReasonIndent column actual)
+
+-- | Parse one or more layout items aligned to the same inferred indentation column.
+--
+-- The indentation column is determined by running the indentation parser before
+-- the first item. Later items are parsed only when the indentation parser succeeds
+-- and reaches that same column.
+indentBlockP :: (Monad m) => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
+indentBlockP indentation item = do
+  column <- indentColumnP indentation
+  firstItem <- item
+  go column (Seq.singleton firstItem)
+ where
+  go column items = chooseElseP [guardedWith indentation (const (indentedItem column items))] (pure items)
+
+  indentedItem column items = do
+    actual <- currentColumnP
+    if actual == column
+      then do
+        value <- item
+        go column (items :|> value)
+      else errP (ReasonIndent column actual)
+
+-- | Parse same-column layout items until an explicit final parser is reached.
+--
+-- The @ahead@ parser selects item lines. Each parsed item must be followed by
+-- indentation back to the first item column before another @ahead@ check runs.
+indentBlockEndByP
+  :: (Monad m) => ParserT e m () -> ParserT e m () -> ParserT e m a -> ParserT e m b -> ParserT e m (Seq a, b)
+indentBlockEndByP indentation ahead item final = do
+  column <- indentColumnP indentation
+  items <- go column Empty
+  result <- final
+  pure (items, result)
+ where
+  go column items = chooseElseP [guarded ahead (nextItem column items)] (pure items)
+
+  nextItem column items = do
+    value <- item <* indentAtP column indentation
+    go column (items :|> value)
+
+-- | Parse a line break, indentation, then a body parser.
+indentedAfterP :: ParserT e m x -> ParserT e m () -> ParserT e m a -> ParserT e m a
+indentedAfterP lineBreak indentation parser = lineBreak *> indentation *> parser
+
+-- | Parse an indented layout block after a line break.
+indentBlockAfterP :: (Monad m) => ParserT e m x -> ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
+indentBlockAfterP lineBreak indentation item = lineBreak *> indentBlockP indentation item
+
+-- | Parse an indented layout block with an explicit final parser after a line break.
+indentBlockEndByAfterP
+  :: (Monad m)
+  => ParserT e m x -> ParserT e m () -> ParserT e m () -> ParserT e m a -> ParserT e m b -> ParserT e m (Seq a, b)
+indentBlockEndByAfterP lineBreak indentation ahead item final = lineBreak *> indentBlockEndByP indentation ahead item final
+
+-- | Parse either an indented form after a line break or an inline form.
+--
+-- If the line break is present this commits to the indented form; otherwise the
+-- inline parser runs without consuming input.
+indentedOrInlineP :: (Monad m) => ParserT e m x -> ParserT e m () -> ParserT e m a -> ParserT e m a
+indentedOrInlineP lineBreak indentation parser = chooseElseP [guarded (void lineBreak) (indentation *> parser)] parser
+
 -- | Parses and returns the length of the consumed input along with the result
 measureP :: (Monad m) => ParserT e m a -> ParserT e m (a, Int)
 measureP p = do
@@ -1079,8 +1192,7 @@ unconsP = stateP $ \st ->
   in  case mxy of
         Nothing -> (Nothing, st)
         Just (x, y) ->
-          let r = stSpan st
-              r' = r {spanStart = spanStart r + 1}
+          let r' = advanceStart 1 st
               st' = st {stHay = y, stSpan = r'}
           in  (Just x, st')
 
@@ -1184,18 +1296,18 @@ instance HasErrMessage Void where
   getErrMessage = const absurd
 
 -- private
-indent :: Int -> [Text] -> [Text]
-indent i = let s = T.replicate (2 * i) " " in fmap (s <>)
+indentLines :: Int -> [Text] -> [Text]
+indentLines i = let s = T.replicate (2 * i) " " in fmap (s <>)
 
 instance (HasErrMessage e) => HasErrMessage (Err e) where
   getErrMessage repPos = go
    where
     go (Err (ErrF (Span start end) re)) =
-      let pos = "Error in range " <> repPos start <> "-" <> repPos end <> ":"
+      let pos = "Error in range " <> repPos (posOffset start) <> "-" <> repPos (posOffset end) <> ":"
           body = case re of
             ReasonCustom e ->
               let hd = "Custom error:"
-                  tl = indent 1 (getErrMessage repPos e)
+                  tl = indentLines 1 (getErrMessage repPos e)
               in  hd : tl
             ReasonExpect expected actual ->
               ["Expected text: '" <> expected <> "' but found: '" <> actual <> "'"]
@@ -1205,17 +1317,19 @@ instance (HasErrMessage e) => HasErrMessage (Err e) where
               ["Expected end but had leftover count: " <> T.pack (show count)]
             ReasonNonAssoc prec ->
               ["Non-associative operator cannot be chained at precedence: " <> T.pack (show prec)]
+            ReasonIndent expected actual ->
+              ["Expected indentation column " <> T.pack (show expected) <> " but got " <> T.pack (show actual)]
             ReasonFail msg -> ["User reported failure: " <> msg]
             ReasonLabeled lab e ->
               let hd = "Label: " <> unLabel lab
-                  tl = indent 1 (go e)
+                  tl = indentLines 1 (go e)
               in  hd : tl
             ReasonTakeNone -> ["Took/dropped no elements"]
             ReasonEmpty -> ["No parse results"]
             ReasonExplained msg hide e ->
               case hide of
                 HideErrorNo ->
-                  let tl = indent 1 (go e)
+                  let tl = indentLines 1 (go e)
                   in  msg : tl
                 HideErrorYes -> [msg]
       in  pos : body
@@ -1223,7 +1337,8 @@ instance (HasErrMessage e) => HasErrMessage (Err e) where
 -- | Create errata formatting a parse error.
 errataE :: (HasErrMessage e) => FilePath -> (Int -> (E.Line, E.Column)) -> Err e -> [E.Errata]
 errataE fp mkP e =
-  let (line, col) = mkP (spanStart (errSpan e))
+  let start = spanStart (errSpan e)
+      (line, col) = (posLine start + 1, posColumn start + 1)
       repP i = let (l, c) = mkP i in "(" <> T.pack (show l) <> ", " <> T.pack (show c) <> ")"
       msg = getErrMessage repP e
       block = E.blockSimple E.basicStyle E.basicPointer fp Nothing (line, col, col + 1, Nothing) (Just (T.unlines msg))
@@ -1233,7 +1348,7 @@ errataE fp mkP e =
 renderE :: (HasErrMessage e) => FilePath -> Text -> Err e -> Text
 renderE fp h e =
   let v = calculateLineCol h
-      mkP i = let (l, c) = lookupLineCol i v in (l + 1, c + 1)
+      mkP i = let pos = posAt i v in (posLine pos + 1, posColumn pos + 1)
   in  TL.toStrict (E.prettyErrors h (errataE fp mkP e))
 
 -- | Print a formatted error to stderr
