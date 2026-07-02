@@ -16,40 +16,60 @@ module Looksee
   , Err (..)
   , errSpan
   , errReason
-  , AltPhase (..)
-  , InfixPhase (..)
+  , Assoc (..)
+  , Prec (..)
   , ParserT
   , Parser
+  , GuardedCase
+  , pattern GuardedCase
+  , GuardedCaseT (..)
+  , guarded
+  , guardedWith
+  , labelG
+  , chooseP
+  , chooseElseP
+  , Op
+  , pattern OpPrefix
+  , pattern OpPostfix
+  , pattern OpInfix
+  , OpT (..)
+  , PrefixOp
+  , pattern PrefixOp
+  , PrefixOpT (..)
+  , PostfixOp
+  , pattern PostfixOp
+  , PostfixOpT (..)
+  , InfixOp
+  , pattern InfixOp
+  , InfixOpT (..)
+  , PrattTable
+  , PrattTableT
+  , prattTable
+  , prattP
+  , prattAtP
+  , prattWithTable
+  , prattAtWithTable
+  , prefixOp
+  , prefixOpWith
+  , postfixOp
+  , postfixOpWith
+  , infixOp
+  , infixOpWith
   , parseT
   , parse
   , parseI
   , spanP
   , spanAroundP
   , throwP
-  , altP
-  , emptyP
   , explainP
   , endP
-  , optP
-  , lookP
-  , branchP
-  , commitP
   , labelP
   , textP
   , textP_
   , charP
   , charP_
-  , breakP
-  , someBreakP
-  , splitP
-  , split1P
-  , split2P
-  , leadP
-  , lead1P
-  , trailP
-  , trail1P
-  , infixRP
-  , someInfixRP
+  , someCharP
+  , someCharP_
   , takeP
   , dropP
   , takeExactP
@@ -63,6 +83,7 @@ module Looksee
   , takeAll1P
   , dropAll1P
   , betweenP
+  , optionalP
   , repeatP
   , repeat1P
   , sepByP
@@ -102,9 +123,6 @@ module Looksee
   )
 where
 
-import Data.Hashable (Hashable)
-import GHC.Generics (Generic)
-import Control.Applicative (Alternative (..))
 import Control.Exception (Exception)
 import Control.Monad (ap, void)
 import Control.Monad.Except (ExceptT, MonadError (..), runExceptT)
@@ -122,7 +140,10 @@ import Data.Bitraversable (Bitraversable (..))
 import Data.Char (digitToInt, isDigit, isSpace)
 import Data.Foldable (toList)
 import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
-import Data.Maybe (fromMaybe, isJust, maybeToList)
+import Data.Hashable (Hashable)
+import Data.IntMap.Strict (IntMap)
+import Data.IntMap.Strict qualified as IntMap
+import Data.Maybe (fromMaybe)
 import Data.Ratio ((%))
 import Data.Scientific (Scientific)
 import Data.Scientific qualified as S
@@ -140,10 +161,16 @@ import Data.Void (Void, absurd)
 import Errata qualified as E
 import Errata.Styles qualified as E
 import Errata.Types qualified as E
+import GHC.Generics (Generic)
 import System.IO (stderr)
 
--- | A generic span, used for tracking ranges of offsets or (line, col)
-data Span a = Span {spanStart :: !a, spanEnd :: !a}
+-- | A generic half-open span, used for tracking ranges of offsets or (line, column) positions.
+data Span a = Span
+  { spanStart :: !a
+  -- ^ Inclusive start of the span.
+  , spanEnd :: !a
+  -- ^ Exclusive end of the span.
+  }
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable, Generic)
   deriving anyclass (Hashable)
 
@@ -170,8 +197,11 @@ lookupLineCol i v =
     then (0, 0)
     else v V.! max 0 (min i (V.length v - 1))
 
--- | A parser label (for error reporting)
-newtype Label = Label {unLabel :: Text}
+-- | A parser label used in error reporting.
+newtype Label = Label
+  { unLabel :: Text
+  -- ^ Textual label shown in parse errors.
+  }
   deriving stock (Show)
   deriving newtype (Eq, Ord, IsString)
 
@@ -188,78 +218,66 @@ data St = St
   }
   deriving stock (Eq, Ord, Show)
 
--- private
--- Returns list of possible break points with positions
--- (startStream, breakPt) (breakPt, endStream) (breakPt + needLen, endStream)
-breakAllRP :: Text -> St -> [(St, St, St)]
-breakAllRP needle (St hay (Span r0 r1) labs) = fmap go (T.breakOnAll needle hay)
- where
-  go (hayA, hayB) =
-    let aLen = T.length hayA
-        endA = r0 + aLen
-        needLen = T.length needle
-        rngA = Span r0 endA
-        rngX = Span endA r1
-        rngB = Span (endA + needLen) r1
-        stA = St hayA rngA labs
-        stX = St (T.drop aLen hay) rngX labs
-        stB = St (T.drop needLen hayB) rngB labs
-    in  (stA, stX, stB)
-
--- private
-breakRP :: Text -> St -> Maybe (St, St, St)
-breakRP needle (St hay (Span r0 r1) labs) =
-  let (hayA, hayB) = T.breakOn needle hay
-  in  if T.null hayB
-        then Nothing
-        else
-          let aLen = T.length hayA
-              endA = r0 + aLen
-              needLen = T.length needle
-              rngA = Span r0 endA
-              rngX = Span endA r1
-              rngB = Span (endA + needLen) r1
-              stA = St hayA rngA labs
-              stX = St (T.drop aLen hay) rngX labs
-              stB = St (T.drop needLen hayB) rngB labs
-          in  Just (stA, stX, stB)
-
--- | Phase of alternative parsing (for error reporting)
-data AltPhase = AltPhaseBranch | AltPhaseCont
+-- | Operator associativity for Pratt infix productions.
+data Assoc
+  = -- | Left-associative infix operator.
+    AssocLeft
+  | -- | Right-associative infix operator.
+    AssocRight
+  | -- | Non-associative infix operator; chaining at the same precedence fails.
+    AssocNone
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
--- | Phase of infix/split parsing (for error reporting)
-data InfixPhase = InfixPhaseLeft | InfixPhaseRight | InfixPhaseCont
+-- | Numeric Pratt precedence. Higher values bind tighter.
+newtype Prec = Prec
+  { unPrec :: Int
+  -- ^ Extract the numeric precedence.
+  }
+  deriving stock (Show)
+  deriving newtype (Eq, Ord, Num)
+
+-- | Whether to hide an underlying error when rendering an explained error.
+data HideError
+  = -- | Show both the explanation and underlying error.
+    HideErrorNo
+  | -- | Show only the explanation.
+    HideErrorYes
   deriving stock (Eq, Ord, Show, Enum, Bounded)
 
--- | Whether to hide an underlying error or not
-data HideError = HideErrorNo | HideErrorYes
-  deriving stock (Eq, Ord, Show, Enum, Bounded)
-
--- | Reason for parse failure
+-- | Reason for parse failure.
 data Reason e r
-  = ReasonCustom !e
-  | ReasonExpect !Text !Text
-  | ReasonDemand !Int !Int
-  | ReasonLeftover !Int
-  | ReasonAlt !(Seq (AltPhase, r))
-  | ReasonInfix !(Seq (Int, InfixPhase, r))
-  | ReasonFail !Text
-  | ReasonLabeled !Label r
-  | ReasonLook r
-  | ReasonTakeNone
-  | ReasonEmpty
-  | ReasonExplained !Text !HideError r
+  = -- | User-supplied custom parse error.
+    ReasonCustom !e
+  | -- | Expected text and actual text found.
+    ReasonExpect !Text !Text
+  | -- | Expected item count and actual item count found.
+    ReasonDemand !Int !Int
+  | -- | Expected end of input, but this many characters remained.
+    ReasonLeftover !Int
+  | -- | A non-associative Pratt operator was chained at the given precedence.
+    ReasonNonAssoc !Int
+  | -- | Failure produced by 'MonadFail'.
+    ReasonFail !Text
+  | -- | Underlying error annotated with a parser label.
+    ReasonLabeled !Label r
+  | -- | A take/drop parser consumed no input when at least one item was required.
+    ReasonTakeNone
+  | -- | No parse result was available.
+    ReasonEmpty
+  | -- | Underlying error annotated with a custom explanation.
+    ReasonExplained !Text !HideError r
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
 deriveBifunctor ''Reason
 deriveBifoldable ''Reason
 deriveBitraversable ''Reason
 
--- | Base functor for 'Err' containing the range and reason for the error
+-- | Base functor for Err containing the range and reason for the error.
 data ErrF e r = ErrF
   { efSpan :: !(Span Int)
+  -- ^ Character offset span covered by the error.
   , efReason :: !(Reason e r)
+  -- ^ Structured reason for the error.
   }
   deriving stock (Eq, Ord, Show, Functor, Foldable, Traversable)
 
@@ -267,8 +285,11 @@ deriveBifunctor ''ErrF
 deriveBifoldable ''ErrF
 deriveBitraversable ''ErrF
 
--- | A parse error, which may contain multiple sub-errors
-newtype Err e = Err {unErr :: ErrF e (Err e)}
+-- | A parse error, which may contain multiple sub-errors.
+newtype Err e = Err
+  { unErr :: ErrF e (Err e)
+  -- ^ Project one layer of the recursive parse error tree.
+  }
   deriving stock (Eq, Ord, Show)
 
 instance Functor Err where
@@ -326,14 +347,6 @@ runT = runStateT . runExceptT . unT
 mkErrT :: (Monad m) => Reason e (Err e) -> T e m (Err e)
 mkErrT re = gets (\st -> Err (ErrF (stSpan st) re))
 
--- private
--- errT :: Monad m => Reason e (Err e) -> T e m a
--- errT = mkErrT >=> throwError
-
--- private
-tryT :: (Monad m) => T e m r -> T e m (Either (Err e) r)
-tryT t = get >>= \st -> lift (runT t st) >>= \(er, st') -> er <$ put st'
-
 -- | The parser monad transformer
 newtype ParserT e m a = ParserT {unParserT :: forall r. (Either (Err e) a -> T e m r) -> T e m r}
 
@@ -348,14 +361,138 @@ instance Monad (ParserT e m) where
   return = pure
   ParserT g >>= f = ParserT (\j -> g (\case Left e -> j (Left e); Right a -> let ParserT h = f a in h j))
 
-instance (Monad m) => Alternative (ParserT e m) where
-  empty = emptyP
-  p1 <|> p2 = altP [p1, p2]
-  many = fmap toList . repeatP
-  some = fmap toList . repeat1P
-
 -- | The parser monad
 type Parser e = ParserT e Identity
+
+-- | A parser branch selected by an explicit guard parser.
+type GuardedCase e = GuardedCaseT e Identity
+
+-- | A parser branch selected by an explicit guard parser in an arbitrary base monad.
+data GuardedCaseT e m b where
+  GuardedCaseT
+    :: ParserT e m a
+    -- ^ Guard parser that selects this branch and produces a value for the body.
+    -> (a -> ParserT e m b)
+    -- ^ Branch body parser, receiving the guard result.
+    -> GuardedCaseT e m b
+
+-- | Pattern synonym for guarded cases specialized to 'Parser'.
+pattern GuardedCase :: Parser e a -> (a -> Parser e b) -> GuardedCase e b
+pattern GuardedCase guard parser = GuardedCaseT guard parser
+
+{-# COMPLETE GuardedCase #-}
+
+instance Functor (GuardedCaseT e m) where
+  fmap f (GuardedCaseT guard parser) = GuardedCaseT guard (fmap f . parser)
+
+-- | A user-defined prefix production.
+type PrefixOp e = PrefixOpT e Identity
+
+-- | A user-defined prefix production in an arbitrary base monad.
+data PrefixOpT e m a where
+  PrefixOpT
+    :: { prefixPrec :: !Prec
+       -- ^ Prefix operator binding precedence.
+       , prefixGuard :: ParserT e m z
+       -- ^ Guard parser that identifies and consumes the prefix operator.
+       , prefixParser :: z -> ParserT e m (a -> a)
+       -- ^ Parser for the rest of the prefix production, returning an AST builder.
+       }
+    -> PrefixOpT e m a
+
+-- | Pattern synonym for prefix productions specialized to 'Parser'.
+pattern PrefixOp :: Prec -> Parser e z -> (z -> Parser e (a -> a)) -> PrefixOp e a
+pattern PrefixOp prec guard parser = PrefixOpT prec guard parser
+
+{-# COMPLETE PrefixOp #-}
+
+-- | A user-defined postfix production.
+type PostfixOp e = PostfixOpT e Identity
+
+-- | A user-defined postfix production in an arbitrary base monad.
+data PostfixOpT e m a where
+  PostfixOpT
+    :: { postfixPrec :: !Prec
+       -- ^ Postfix operator binding precedence.
+       , postfixGuard :: ParserT e m z
+       -- ^ Guard parser that identifies and consumes the postfix operator.
+       , postfixParser :: z -> ParserT e m (a -> a)
+       -- ^ Parser for the rest of the postfix production, returning an AST builder.
+       }
+    -> PostfixOpT e m a
+
+-- | Pattern synonym for postfix productions specialized to 'Parser'.
+pattern PostfixOp :: Prec -> Parser e z -> (z -> Parser e (a -> a)) -> PostfixOp e a
+pattern PostfixOp prec guard parser = PostfixOpT prec guard parser
+
+{-# COMPLETE PostfixOp #-}
+
+-- | A user-defined infix production.
+type InfixOp e = InfixOpT e Identity
+
+-- | A user-defined infix production in an arbitrary base monad.
+data InfixOpT e m a where
+  InfixOpT
+    :: { infixAssoc :: !Assoc
+       -- ^ Infix operator associativity.
+       , infixPrec :: !Prec
+       -- ^ Infix operator binding precedence.
+       , infixGuard :: ParserT e m z
+       -- ^ Guard parser that identifies and consumes the infix operator.
+       , infixParser :: z -> ParserT e m (a -> a -> a)
+       -- ^ Parser for the rest of the infix production, returning an AST builder.
+       }
+    -> InfixOpT e m a
+
+-- | Pattern synonym for infix productions specialized to 'Parser'.
+pattern InfixOp :: Assoc -> Prec -> Parser e z -> (z -> Parser e (a -> a -> a)) -> InfixOp e a
+pattern InfixOp assoc prec guard parser = InfixOpT assoc prec guard parser
+
+{-# COMPLETE InfixOp #-}
+
+-- | A user-defined Pratt production.
+type Op e = OpT e Identity
+
+-- | A user-defined Pratt production in an arbitrary base monad.
+data OpT e m a
+  = -- | Prefix Pratt operator production.
+    OpPrefixT !(PrefixOpT e m a)
+  | -- | Postfix Pratt operator production.
+    OpPostfixT !(PostfixOpT e m a)
+  | -- | Infix Pratt operator production.
+    OpInfixT !(InfixOpT e m a)
+
+-- | Pattern synonym for prefix Pratt operators specialized to 'Parser'.
+pattern OpPrefix :: PrefixOp e a -> Op e a
+pattern OpPrefix prefix = OpPrefixT prefix
+
+-- | Pattern synonym for postfix Pratt operators specialized to 'Parser'.
+pattern OpPostfix :: PostfixOp e a -> Op e a
+pattern OpPostfix postfix = OpPostfixT postfix
+
+-- | Pattern synonym for infix Pratt operators specialized to 'Parser'.
+pattern OpInfix :: InfixOp e a -> Op e a
+pattern OpInfix infix0 = OpInfixT infix0
+
+{-# COMPLETE OpPrefix, OpPostfix, OpInfix #-}
+
+data ProdsT e m a = ProdsT
+  { prodsPrefix :: !(IntMap (Seq (PrefixOpT e m a)))
+  , prodsPostfix :: !(IntMap (Seq (PostfixOpT e m a)))
+  , prodsInfix :: !(IntMap (Seq (InfixOpT e m a)))
+  }
+
+-- | A grouped Pratt operator table specialized to 'Parser'.
+type PrattTable e = PrattTableT e Identity
+
+-- | A grouped Pratt operator table in an arbitrary base monad.
+newtype PrattTableT e m a = PrattTableT
+  { unPrattTableT :: ProdsT e m a
+  }
+
+data StepProdT e m a
+  = StepPostfixT !(PostfixOpT e m a)
+  | StepInfixT !(InfixOpT e m a)
 
 instance MonadTrans (ParserT e) where
   lift ma = ParserT (\j -> lift ma >>= j . Right)
@@ -388,16 +525,8 @@ finishParserT (ParserT g) st =
   in  runT t st
 
 -- private
-getP :: (Monad m) => ParserT e m St
-getP = ParserT (\j -> get >>= j . Right)
-
--- private
 getsP :: (Monad m) => (St -> a) -> ParserT e m a
 getsP f = ParserT (\j -> gets f >>= j . Right)
-
--- private
-putP :: (Monad m) => St -> ParserT e m ()
-putP st = ParserT (\j -> put st >>= j . Right)
 
 -- private
 stateP :: (Monad m) => (St -> (a, St)) -> ParserT e m a
@@ -432,7 +561,7 @@ parseI p h = do
 
 -- | Get the span (in character offset) at the current point representing
 -- the entire parseable range. At the start of parsing this will be `Span 0 n` for
--- an `n`-character document. The start offset will increase as input is consumed,
+-- an @n@-character document. The start offset will increase as input is consumed,
 -- and the end offset will decrease as lookahead delimits the range. To evaluate
 -- the "real" range of characters consumed by a parser, construct a span with the
 -- starting offsets before and after executing a subparser (or use 'spanAroundP').
@@ -459,41 +588,17 @@ endP = do
     then pure ()
     else errP (ReasonLeftover l)
 
--- | Makes parse success optional
-optP :: (Monad m) => ParserT e m a -> ParserT e m (Maybe a)
-optP (ParserT g) = ParserT $ \j -> do
+-- private
+guardP :: (Monad m) => ParserT e m a -> ParserT e m (Maybe a)
+guardP (ParserT g) = ParserT $ \j -> do
   st0 <- get
   g $ \case
     Left _ -> put st0 >> j (Right Nothing)
     Right a -> j (Right (Just a))
 
 -- private
-subAltP
-  :: (Monad m)
-  => (Either (Err e) a -> T e m r)
-  -> St
-  -> Seq (AltPhase, Err e)
-  -> [ParserT e m a]
-  -> T e m r
-subAltP j st0 = go
- where
-  go !errs = \case
-    [] -> mkErrT (if Seq.null errs then ReasonEmpty else ReasonAlt errs) >>= j . Left
-    ParserT g : rest -> g $ \case
-      Left e -> put st0 >> go (errs :|> (AltPhaseBranch, e)) rest
-      Right r -> do
-        es <- tryT (j (Right r))
-        case es of
-          Left e -> put st0 >> go (errs :|> (AltPhaseCont, e)) rest
-          Right s -> pure s
-
--- | Parse with many possible branches
-altP :: (Monad m, Foldable f) => f (ParserT e m a) -> ParserT e m a
-altP falts = ParserT (\j -> get >>= \st0 -> subAltP j st0 Empty (toList falts))
-
--- | Fail with no results
-emptyP :: (Monad m) => ParserT e m a
-emptyP = ParserT (\j -> mkErrT ReasonEmpty >>= j . Left)
+noChoiceP :: (Monad m) => ParserT e m a
+noChoiceP = ParserT (\j -> mkErrT ReasonEmpty >>= j . Left)
 
 -- | If things fail and you can give a good message explaining why, this combinator will
 -- annotate the error with your explanation. Returning 'True' with message will hide
@@ -511,55 +616,32 @@ explainP f (ParserT g) = ParserT $ \j -> g $ \ea ->
           j (Left e')
     Right _ -> j ea
 
--- | Lookahead - rewinds state if the parser succeeds, otherwise throws error
-lookP :: (Monad m) => ParserT e m a -> ParserT e m a
-lookP (ParserT g) = ParserT $ \j -> do
-  st0 <- get
-  g (\ea -> put st0 >> j (first (Err . ErrF (stSpan st0) . ReasonLook) ea))
+-- | Build a guarded branch whose guard result is passed to the body.
+guardedWith :: ParserT e m a -> (a -> ParserT e m b) -> GuardedCaseT e m b
+guardedWith = GuardedCaseT
 
--- private
-subBranchP
-  :: (Monad m)
-  => (Either (Err e) a -> T e m r)
-  -> St
-  -> Seq (AltPhase, Err e)
-  -> [(ParserT e m (), ParserT e m a)]
-  -> T e m r
-subBranchP j st0 = go
+-- | Build a guarded branch whose guard only selects the body.
+guarded :: ParserT e m () -> ParserT e m b -> GuardedCaseT e m b
+guarded guard parser = guardedWith guard (const parser)
+
+-- | Label the body of a guarded branch without labelling its guard.
+labelG :: (Monad m) => Label -> GuardedCaseT e m a -> GuardedCaseT e m a
+labelG lab (GuardedCaseT guard parser) = GuardedCaseT guard (labelP lab . parser)
+
+-- | Choose the first guarded branch whose guard succeeds.
+chooseP :: (Monad m, Foldable f) => f (GuardedCaseT e m a) -> ParserT e m a
+chooseP branches = chooseElseP branches noChoiceP
+
+-- | Choose the first guarded branch whose guard succeeds, otherwise run a fallback.
+chooseElseP :: (Monad m, Foldable f) => f (GuardedCaseT e m a) -> ParserT e m a -> ParserT e m a
+chooseElseP branches fallback = go (toList branches)
  where
-  go !errs = \case
-    [] -> mkErrT (if Seq.null errs then ReasonEmpty else ReasonAlt errs) >>= j . Left
-    (ParserT gl, ParserT gx) : rest -> gl $ \case
-      Left _ -> put st0 >> go errs rest
-      Right _ -> do
-        put st0
-        gx $ \case
-          Left e -> put st0 >> go (errs :|> (AltPhaseBranch, e)) rest
-          Right r -> do
-            es <- tryT (j (Right r))
-            case es of
-              Left e -> put st0 >> go (errs :|> (AltPhaseCont, e)) rest
-              Right s -> pure s
-
--- | Branches guarded by lookahead. Use this for more concise errors.
--- 'altP' will happily tell you about each of the errors it encountered in
--- every branch, but this will quietly prune non-matching branches.
--- Tries until first success (in order), so you can tack on a fallthrough case even if
--- you tried a branch earlier.
-branchP :: (Monad m, Foldable f) => f (ParserT e m (), ParserT e m a) -> ParserT e m a
-branchP falts = ParserT (\j -> get >>= \st0 -> subBranchP j st0 Empty (toList falts))
-
--- | An alternative to 'branchP' that does not backtrack after committing to a branch.
-commitP :: (Monad m, Foldable f) => f (ParserT e m (), ParserT e m a) -> ParserT e m a
-commitP = go . toList
- where
-  go = \case
-    [] -> emptyP
-    (p, q) : rest -> do
-      mx <- optP (lookP p)
-      case mx of
-        Nothing -> go rest
-        Just _ -> q
+  go [] = fallback
+  go (GuardedCaseT guard parser : rest) = do
+    mx <- guardP guard
+    case mx of
+      Nothing -> go rest
+      Just x -> parser x
 
 -- | Labels parse errors
 labelP :: (Monad m) => Label -> ParserT e m a -> ParserT e m a
@@ -576,7 +658,7 @@ textP n = do
     then pure n
     else errP (ReasonExpect n o)
 
--- | Saves you from importing 'void'
+-- | Expect the given text at the start of the range, discarding the matched text.
 textP_ :: (Monad m) => Text -> ParserT e m ()
 textP_ = void . textP
 
@@ -584,143 +666,173 @@ textP_ = void . textP
 charP :: (Monad m) => Char -> ParserT e m Char
 charP = fmap T.head . textP . T.singleton
 
--- | Saves you from importing 'void'
+-- | Expect the given character at the start of the range, discarding the matched character.
 charP_ :: (Monad m) => Char -> ParserT e m ()
 charP_ = void . charP
 
--- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
--- Chooses first split from START to END of range (see 'infixRP').
-breakP :: (Monad m) => Text -> ParserT e m a -> ParserT e m a
-breakP tx pa = fmap fst (infixRP tx pa (pure ()))
+-- | Expect one of the given characters at the start of the range.
+someCharP :: (Monad m, Foldable f) => f Char -> ParserT e m Char
+someCharP chars0 = do
+  let chars = toList chars0
+  case chars of
+    [] -> errP ReasonEmpty
+    _ -> do
+      mc <- stateP $ \st ->
+        let h = stHay st
+        in  case T.uncons h of
+              Nothing -> (Nothing, st)
+              Just (c, h') ->
+                if c `elem` chars
+                  then
+                    let r = stSpan st
+                        r' = r {spanStart = spanStart r + 1}
+                        st' = st {stHay = h', stSpan = r'}
+                    in  (Just c, st')
+                  else (Nothing, st)
+      case mc of
+        Nothing -> do
+          hay <- getsP stHay
+          let expected = T.pack chars
+              actual = T.take 1 hay
+          errP (ReasonExpect expected actual)
+        Just c -> pure c
 
--- | Split once on the delimiter (first argument), parsing everything before it with a narrowed range.
--- Chooses splits from START to END of range (see 'someInfixRP').
-someBreakP :: (Monad m) => Text -> ParserT e m a -> ParserT e m a
-someBreakP tx pa = fmap fst (someInfixRP tx pa (pure ()))
+-- | Expect one of the given characters at the start of the range, discarding the matched character.
+someCharP_ :: (Monad m, Foldable f) => f Char -> ParserT e m ()
+someCharP_ = void . someCharP
 
--- private
-splitTailP :: (Monad m) => Text -> ParserT e m a -> Seq a -> St -> ParserT e m (Seq a)
-splitTailP tx pa = go
+-- | Parse an expression using all Pratt productions, starting at the lowest precedence.
+prattP :: (Monad m, Foldable f) => f (OpT e m a) -> ParserT e m a -> ParserT e m a
+prattP productions = prattWithTable (prattTable productions)
+
+-- | Parse an expression using Pratt productions whose binding power is at least the supplied precedence.
+prattAtP :: (Monad m, Foldable f) => Prec -> f (OpT e m a) -> ParserT e m a -> ParserT e m a
+prattAtP minPrec productions = prattAtWithTable minPrec (prattTable productions)
+
+-- | Group Pratt operator productions into a reusable table.
+prattTable :: (Foldable f) => f (OpT e m a) -> PrattTableT e m a
+prattTable = PrattTableT . groupProds
+
+-- | Parse an expression using a pre-grouped Pratt operator table, starting at the lowest precedence.
+prattWithTable :: (Monad m) => PrattTableT e m a -> ParserT e m a -> ParserT e m a
+prattWithTable = prattAtWithTable (Prec minBound)
+
+-- | Parse an expression using a pre-grouped Pratt operator table at the supplied minimum precedence.
+prattAtWithTable :: (Monad m) => Prec -> PrattTableT e m a -> ParserT e m a -> ParserT e m a
+prattAtWithTable minPrec (PrattTableT prods) atom = parseAt minPrec Nothing
  where
-  go !acc !st = do
-    mz <- optInfixRP tx pa (pure ())
-    case mz of
-      Nothing -> optP pa >>= maybe (acc <$ putP st) (pure . (acc :|>))
-      Just (a, st', _) -> go (acc :|> a) st'
+  parseAt prec forbidden = do
+    lhs <- parseHead
+    parseTail prec forbidden lhs
 
--- | Split on the delimiter, parsing segments with a narrowed range, until parsing fails.
--- Returns the sequence of successes with state at the delimiter preceding the failure (or end of input),
--- Note that this will always succeed, sometimes consuming no input and yielding empty results.
-splitP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-splitP tx pa = getP >>= splitTailP tx pa Empty
+  parseHead = chooseElseP (prefixBranch <$> prodsPrefixAll prods) atom
 
--- | Like 'splitP' but ensures the sequence is at least length 1.
-split1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-split1P tx pa = do
-  mz <- optInfixRP tx pa (pure ())
-  case mz of
-    Nothing -> fmap Seq.singleton pa
-    Just (a, st', _) -> splitTailP tx pa (Seq.singleton a) st'
+  prefixBranch (PrefixOpT opPrec guard op) = guardedWith guard $ \guardValue -> do
+    build <- op guardValue
+    build <$> parseAt opPrec Nothing
 
--- | Like 'splitP' but ensures the sequence is at least length 2.
--- (This ensures there is at least one delimiter included.)
-split2P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-split2P tx pa = do
-  a0 <- someBreakP tx pa
-  mz <- optInfixRP tx pa (pure ())
-  case mz of
-    Nothing -> fmap (Empty :|> a0 :|>) pa
-    Just (a1, st', _) -> splitTailP tx pa (Empty :|> a0 :|> a1) st'
+  parseTail prec forbidden lhs = do
+    rejectForbidden forbidden
+    step <- chooseElseP (stepBranch lhs <$> (postfixSteps <> infixSteps)) (pure Nothing)
+    case step of
+      Nothing -> pure lhs
+      Just lhs1 -> parseTail prec Nothing lhs1
+   where
+    postfixSteps = StepPostfixT <$> prodsPostfixAtLeast prec prods
+    infixSteps = StepInfixT <$> prodsInfixAtLeast prec prods
 
--- | Like 'splitP' but ensures a leading delimiter
-leadP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-leadP tx pa = do
-  mu <- optP (textP tx)
-  case mu of
-    Nothing -> pure Empty
-    Just _ -> split1P tx pa
+    stepBranch lhs0 stepProd = case stepProd of
+      StepPostfixT (PostfixOpT _ guard op) -> guardedWith guard $ \guardValue -> do
+        build <- op guardValue
+        pure (Just (build lhs0))
+      StepInfixT (InfixOpT assoc opPrec guard op) -> guardedWith guard $ \guardValue -> do
+        build <- op guardValue
+        rhs <- parseAt (rightPrec assoc opPrec) (nonAssocPrec assoc opPrec)
+        pure (Just (build lhs0 rhs))
 
--- | Like 'split1P' but ensures a leading delimiter
-lead1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-lead1P tx pa = textP tx >> split1P tx pa
+  rejectForbidden = \case
+    Nothing -> pure ()
+    Just opPrec -> chooseElseP (forbiddenBranch <$> prodsInfixAt opPrec prods) (pure ())
+     where
+      forbiddenBranch (InfixOpT _ _ guard _) = guardedWith guard (const (errP (ReasonNonAssoc (unPrec opPrec))))
 
--- | Like 'splitP' but ensures a trailing delimiter
-trailP :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-trailP tx pa = do
-  as <- splitP tx pa
-  case as of
-    Empty -> pure Empty
-    _ -> as <$ textP tx
+  rightPrec = \case
+    AssocLeft -> nextPrec
+    AssocRight -> id
+    AssocNone -> nextPrec
 
--- | Like 'split1P' but ensures a trailing delimiter
-trail1P :: (Monad m) => Text -> ParserT e m a -> ParserT e m (Seq a)
-trail1P tx pa = split1P tx pa <* textP tx
+  nonAssocPrec = \case
+    AssocNone -> Just
+    _ -> const Nothing
 
--- private
-subInfixP
-  :: (Monad m)
-  => St
-  -> ParserT e m a
-  -> ParserT e m b
-  -> (Either (Err e) (Maybe (a, St, b)) -> T e m r)
-  -> [(St, St, St)]
-  -> T e m r
-subInfixP st0 pa pb j = go Empty
+-- | Build a prefix Pratt operator from a guard and a constant AST builder.
+prefixOp :: Prec -> ParserT e m z -> (a -> a) -> OpT e m a
+prefixOp prec guard build = prefixOpWith prec guard (const (pure build))
+
+-- | Build a prefix Pratt operator from a guard and parser for its AST builder.
+prefixOpWith :: Prec -> ParserT e m z -> (z -> ParserT e m (a -> a)) -> OpT e m a
+prefixOpWith prec guard parser = OpPrefixT (PrefixOpT prec guard parser)
+
+-- | Build a postfix Pratt operator from a guard and a constant AST builder.
+postfixOp :: Prec -> ParserT e m z -> (a -> a) -> OpT e m a
+postfixOp prec guard build = postfixOpWith prec guard (const (pure build))
+
+-- | Build a postfix Pratt operator from a guard and parser for its AST builder.
+postfixOpWith :: Prec -> ParserT e m z -> (z -> ParserT e m (a -> a)) -> OpT e m a
+postfixOpWith prec guard parser = OpPostfixT (PostfixOpT prec guard parser)
+
+-- | Build an infix Pratt operator from a guard and a constant AST builder.
+infixOp :: Assoc -> Prec -> ParserT e m z -> (a -> a -> a) -> OpT e m a
+infixOp assoc prec guard build = infixOpWith assoc prec guard (const (pure build))
+
+-- | Build an infix Pratt operator from a guard and parser for its AST builder.
+infixOpWith :: Assoc -> Prec -> ParserT e m z -> (z -> ParserT e m (a -> a -> a)) -> OpT e m a
+infixOpWith assoc prec guard parser = OpInfixT (InfixOpT assoc prec guard parser)
+
+nextPrec :: Prec -> Prec
+nextPrec (Prec n)
+  | n == maxBound = Prec maxBound
+  | otherwise = Prec (n + 1)
+
+groupProds :: (Foldable f) => f (OpT e m a) -> ProdsT e m a
+groupProds = foldr go (ProdsT IntMap.empty IntMap.empty IntMap.empty)
  where
-  go !errs = \case
-    [] -> do
-      put st0
-      case errs of
-        Empty -> j (Right Nothing)
-        _ -> mkErrT (ReasonInfix errs) >>= j . Left
-    (stA, stX, stB) : sts -> do
-      let startX = spanStart (stSpan stX)
-      put stA
-      unParserT (pa <* endP) $ \case
-        Left errA -> go (errs :|> (startX, InfixPhaseLeft, errA)) sts
-        Right a -> do
-          put stB
-          unParserT pb $ \case
-            Left errB -> go (errs :|> (startX, InfixPhaseRight, errB)) sts
-            Right b -> do
-              ec <- tryT (j (Right (Just (a, stX, b))))
-              case ec of
-                Left errC -> go (errs :|> (startX, InfixPhaseCont, errC)) sts
-                Right c -> pure c
+  go prod acc = case prod of
+    OpPrefixT prefix -> acc {prodsPrefix = insertProd prefixPrec prefix (prodsPrefix acc)}
+    OpPostfixT postfix -> acc {prodsPostfix = insertProd postfixPrec postfix (prodsPostfix acc)}
+    OpInfixT infix0 -> acc {prodsInfix = insertProd infixPrec infix0 (prodsInfix acc)}
 
--- private
-optInfixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (Maybe (a, St, b))
-optInfixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (optInfixFn j) (breakAllRP tx st0))
+insertProd :: (a -> Prec) -> a -> IntMap (Seq a) -> IntMap (Seq a)
+insertProd prec prod = IntMap.alter appendProd (unPrec (prec prod))
+ where
+  appendProd = \case
+    Nothing -> Just (Seq.singleton prod)
+    Just prods -> Just (prods :|> prod)
 
--- private
-optInfixFn
-  :: (Either (Err e) (Maybe (a, St, b)) -> T e m r)
-  -> (Either (Err e) (Maybe (a, St, b)) -> T e m r)
-optInfixFn j e = case e of
-  Right _ -> j e
-  Left _ -> j (Right Nothing)
+prodsPrefixAll :: ProdsT e m a -> Seq (PrefixOpT e m a)
+prodsPrefixAll = intMapDesc . prodsPrefix
 
--- private
-requireInfixFn
-  :: (Monad m)
-  => (Either (Err e) (a, b) -> T e m r)
-  -> (Either (Err e) (Maybe (a, St, b)) -> T e m r)
-requireInfixFn j = \case
-  Right mxab ->
-    case mxab of
-      Nothing -> mkErrT ReasonEmpty >>= j . Left
-      Just (a, _, b) -> j (Right (a, b))
-  Left e -> j (Left e)
+prodsPostfixAtLeast :: Prec -> ProdsT e m a -> Seq (PostfixOpT e m a)
+prodsPostfixAtLeast minPrec = prodsAtLeast minPrec . prodsPostfix
 
--- | Right-associative infix parsing. Searches for the operator from START to END of range,
--- trying only the first break point.
-infixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
-infixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (requireInfixFn j) (maybeToList (breakRP tx st0)))
+prodsInfixAtLeast :: Prec -> ProdsT e m a -> Seq (InfixOpT e m a)
+prodsInfixAtLeast minPrec = prodsAtLeast minPrec . prodsInfix
 
--- | Right-associative infix parsing. Searches for the operator from START to END of range,
--- trying subsequent break points until success.
-someInfixRP :: (Monad m) => Text -> ParserT e m a -> ParserT e m b -> ParserT e m (a, b)
-someInfixRP tx pa pb = ParserT (\j -> get >>= \st0 -> subInfixP st0 pa pb (requireInfixFn j) (breakAllRP tx st0))
+prodsInfixAt :: Prec -> ProdsT e m a -> Seq (InfixOpT e m a)
+prodsInfixAt prec = fromMaybe Empty . IntMap.lookup (unPrec prec) . prodsInfix
+
+prodsAtLeast :: Prec -> IntMap (Seq a) -> Seq a
+prodsAtLeast prec prods = intMapDescThen higher (fromMaybe Empty here)
+ where
+  (_, here, higher) = IntMap.splitLookup (unPrec prec) prods
+
+intMapDesc :: IntMap (Seq a) -> Seq a
+intMapDesc prods = intMapDescThen prods Empty
+
+intMapDescThen :: IntMap (Seq a) -> Seq a -> Seq a
+intMapDescThen prods rest = case IntMap.maxViewWithKey prods of
+  Nothing -> rest
+  Just ((_, bucket), lower) -> bucket <> intMapDescThen lower rest
 
 -- | Take the given number of characters from the start of the range, or fewer if empty
 takeP :: (Monad m) => Int -> ParserT e m Text
@@ -731,7 +843,7 @@ takeP i = stateP $ \st ->
       r = stSpan st
       r' = r {spanStart = spanStart r + l}
       st' = st {stHay = h', stSpan = r'}
-  in  (o, st')
+  in  (T.copy o, st')
 
 -- | Take exactly the given number of characters from the start of the range, or error
 takeExactP :: (Monad m) => Int -> ParserT e m Text
@@ -743,7 +855,7 @@ takeExactP i = do
         r = stSpan st
         r' = r {spanStart = spanStart r + T.length o}
         st' = st {stHay = h', stSpan = r'}
-    in  if l == i then (Right o, st') else (Left l, st)
+    in  if l == i then (Right (T.copy o), st') else (Left l, st)
   case et of
     Left l -> errP (ReasonDemand i l)
     Right a -> pure a
@@ -766,7 +878,7 @@ takeWhileP f = stateP $ \st ->
       r = stSpan st
       r' = r {spanStart = spanStart r + l}
       st' = st {stHay = h', stSpan = r'}
-  in  (o, st')
+  in  (T.copy o, st')
 
 -- | Like 'takeWhileP' but ensures at least 1 character has been taken
 takeWhile1P :: (Monad m) => (Char -> Bool) -> ParserT e m Text
@@ -779,7 +891,7 @@ takeWhile1P f = do
         r = stSpan st
         r' = r {spanStart = spanStart r + l}
         st' = st {stHay = h', stSpan = r'}
-    in  if l == 0 then (Nothing, st) else (Just o, st')
+    in  if l == 0 then (Nothing, st) else (Just (T.copy o), st')
   case mt of
     Nothing -> errP ReasonTakeNone
     Just a -> pure a
@@ -799,7 +911,7 @@ takeAllP = stateP $ \st ->
       r = stSpan st
       r' = r {spanStart = spanEnd r}
       st' = st {stHay = T.empty, stSpan = r'}
-  in  (h, st')
+  in  (T.copy h, st')
 
 -- | Like 'takeAllP' but ensures at least 1 character has been taken
 takeAll1P :: (Monad m) => ParserT e m Text
@@ -809,7 +921,7 @@ takeAll1P = do
         r = stSpan st
         r' = r {spanStart = spanEnd r}
         st' = st {stHay = T.empty, stSpan = r'}
-    in  if T.null h then (Nothing, st) else (Just h, st')
+    in  if T.null h then (Nothing, st) else (Just (T.copy h), st')
   case mt of
     Nothing -> errP (ReasonDemand 1 0)
     Just a -> pure a
@@ -874,48 +986,65 @@ singleStrP = strP '\''
 betweenP :: ParserT e m x -> ParserT e m y -> ParserT e m a -> ParserT e m a
 betweenP px py pa = px *> pa <* py
 
-repeatTailP :: (Monad m) => ParserT e m a -> Seq a -> ParserT e m (Seq a)
-repeatTailP p = go
+-- | Parse an optional guarded production.
+optionalP :: (Monad m) => GuardedCaseT e m a -> ParserT e m (Maybe a)
+optionalP branch = chooseElseP [Just <$> branch] (pure Nothing)
+
+repeatTailP :: (Monad m) => GuardedCaseT e m a -> Seq a -> ParserT e m (Seq a)
+repeatTailP (GuardedCaseT guard parser) = go
  where
   go !acc = do
-    ma <- optP p
-    case ma of
-      Nothing -> pure acc
-      Just a -> go (acc :|> a)
+    chooseElseP
+      [ guardedWith guard $ \x -> do
+          a <- parser x
+          go (acc :|> a)
+      ]
+      (pure acc)
 
--- | Repeat a parser until it fails, collecting the results.
-repeatP :: (Monad m) => ParserT e m a -> ParserT e m (Seq a)
-repeatP p = repeatTailP p Empty
+-- | Repeat a guarded parser until the guard no longer matches, collecting the results.
+repeatP :: (Monad m) => GuardedCaseT e m a -> ParserT e m (Seq a)
+repeatP branch = repeatTailP branch Empty
 
--- | Like 'repeatP' but ensures at least one result.
-repeat1P :: (Monad m) => ParserT e m a -> ParserT e m (Seq a)
-repeat1P p = p >>= repeatTailP p . Seq.singleton
+-- | Like 'repeatP' but requires the first item.
+repeat1P :: (Monad m) => GuardedCaseT e m a -> ParserT e m (Seq a)
+repeat1P branch = do
+  item <- chooseP [branch]
+  repeatTailP branch (Seq.singleton item)
 
 -- private
-sepByTailP :: (Monad m) => ParserT e m () -> ParserT e m a -> Seq a -> ParserT e m (Seq a)
-sepByTailP pu pa = go
+sepByTailP :: (Monad m, Foldable f) => GuardedCaseT e m () -> f (GuardedCaseT e m a) -> Seq a -> ParserT e m (Seq a)
+sepByTailP (GuardedCaseT sepGuard sepParser) itemBranches = go
  where
   go !acc = do
-    ma <- optP (pu >> pa)
-    case ma of
-      Nothing -> pure acc
-      Just a -> go (acc :|> a)
+    chooseElseP
+      [ guardedWith sepGuard $ \x -> do
+          sepParser x
+          a <- chooseP itemBranches
+          go (acc :|> a)
+      ]
+      (pure acc)
 
--- | Parse a sequence of items delimited by the first parser
-sepByP :: (Monad m) => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
-sepByP pu pa = optP pa >>= maybe (pure Empty) (sepByTailP pu pa . Seq.singleton)
+-- | Parse a guarded sequence of items separated by a guarded separator.
+sepByP :: (Monad m, Foldable f) => GuardedCaseT e m () -> f (GuardedCaseT e m a) -> ParserT e m (Seq a)
+sepByP sepBranch itemBranches = chooseElseP (firstBranch <$> toList itemBranches) (pure Empty)
+ where
+  firstBranch (GuardedCaseT itemGuard itemParser) = guardedWith itemGuard $ \x -> do
+    item <- itemParser x
+    sepByTailP sepBranch itemBranches (Seq.singleton item)
 
 -- | Like 'sepByP' but ensures at least one result.
-sepBy1P :: (Monad m) => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
-sepBy1P pu pa = pa >>= sepByTailP pu pa . Seq.singleton
+sepBy1P :: (Monad m, Foldable f) => GuardedCaseT e m () -> f (GuardedCaseT e m a) -> ParserT e m (Seq a)
+sepBy1P sepBranch itemBranch = do
+  item <- chooseP itemBranch
+  sepByTailP sepBranch itemBranch (Seq.singleton item)
 
 -- | Like 'sepByP' but ensures at least two results (and at least one delimiter).
-sepBy2P :: (Monad m) => ParserT e m () -> ParserT e m a -> ParserT e m (Seq a)
-sepBy2P pu pa = do
-  a0 <- pa
-  pu
-  a1 <- pa
-  sepByTailP pu pa (Empty :|> a0 :|> a1)
+sepBy2P :: (Monad m, Foldable f) => GuardedCaseT e m () -> f (GuardedCaseT e m a) -> ParserT e m (Seq a)
+sepBy2P sepBranch itemBranch = do
+  a0 <- chooseP itemBranch
+  chooseP [sepBranch]
+  a1 <- chooseP itemBranch
+  sepByTailP sepBranch itemBranch (Empty :|> a0 :|> a1)
 
 -- | Consumes many spaces at the start of the range
 spaceP :: (Monad m) => ParserT e m ()
@@ -962,11 +1091,7 @@ headP = unconsP >>= maybe (errP (ReasonDemand 1 0)) pure
 
 -- | Add signed-ness to any parser with a negate function
 signedWithP :: (Monad m) => (a -> a) -> ParserT e m a -> ParserT e m a
-signedWithP neg p = do
-  ms <- optP (charP '-')
-  case ms of
-    Nothing -> p
-    Just _ -> fmap neg p
+signedWithP neg p = chooseElseP [guarded (charP_ '-') (fmap neg p)] p
 
 -- | Add signed-ness to any numeric parser
 signedP :: (Monad m, Num a) => ParserT e m a -> ParserT e m a
@@ -988,14 +1113,14 @@ decP = signedP udecP
 udecP :: (Monad m) => ParserT e m Rational
 udecP = do
   whole <- fmap fromInteger uintP
-  hasDot <- fmap isJust (optP (charP '.'))
-  if hasDot
-    then do
-      (numerator, places) <- measureP uintP
-      let denominator = 10 ^ places
-          part = numerator % denominator
-      pure (whole + part)
-    else pure whole
+  chooseElseP
+    [ guarded (charP_ '.') $ do
+        (numerator, places) <- measureP uintP
+        let denominator = 10 ^ places
+            part = numerator % denominator
+        pure (whole + part)
+    ]
+    (pure whole)
 
 -- | Parse a signed scientific number
 sciP :: (Monad m) => ParserT e m Scientific
@@ -1005,10 +1130,9 @@ sciP = signedP usciP
 usciP :: (Monad m) => ParserT e m Scientific
 usciP = do
   whole <- uintP
-  hasDot <- fmap isJust (optP (charP_ '.'))
-  (frac, places) <- if hasDot then measureP uintP else pure (0, 0)
-  hasEx <- fmap isJust (optP (charP_ 'e' <|> charP_ 'E'))
-  ex <- if hasEx then fmap fromIntegral intP else pure 0
+  (frac, places) <- chooseElseP [guarded (charP_ '.') (measureP uintP)] (pure (0, 0))
+  ex <-
+    chooseElseP [guarded (someCharP_ ("eE" :: String)) (fmap fromIntegral intP)] (pure 0)
   let wholeS = S.scientific whole ex
       partS = S.scientific frac (ex - places)
   pure (wholeS + partS)
@@ -1021,10 +1145,11 @@ numP = signedWithP (bimap negate negate) unumP
 unumP :: (Monad m) => ParserT e m (Either Integer Scientific)
 unumP = do
   whole <- uintP
-  hasDot <- fmap isJust (optP (charP_ '.'))
-  mayFracPlaces <- if hasDot then fmap Just (measureP uintP) else pure Nothing
-  hasEx <- fmap isJust (optP (charP_ 'e' <|> charP_ 'E'))
-  mayEx <- if hasEx then fmap (Just . fromIntegral) intP else pure Nothing
+  mayFracPlaces <- chooseElseP [guarded (charP_ '.') (fmap Just (measureP uintP))] (pure Nothing)
+  mayEx <-
+    chooseElseP
+      [guarded (someCharP_ ("eE" :: String)) (fmap (Just . fromIntegral) intP)]
+      (pure Nothing)
   case (mayFracPlaces, mayEx) of
     (Nothing, Nothing) -> pure (Left whole)
     _ -> do
@@ -1052,6 +1177,7 @@ stripEnd1P p = p <* space1P
 
 -- | Implement this to format custom errors. The list will be indented and joined with `unlines`.
 class HasErrMessage e where
+  -- | Render a custom error value as one or more lines, using the supplied offset renderer.
   getErrMessage :: (Int -> Text) -> e -> [Text]
 
 instance HasErrMessage Void where
@@ -1077,26 +1203,11 @@ instance (HasErrMessage e) => HasErrMessage (Err e) where
               ["Expected count: " <> T.pack (show expected) <> " but got: " <> T.pack (show actual)]
             ReasonLeftover count ->
               ["Expected end but had leftover count: " <> T.pack (show count)]
-            ReasonAlt errs ->
-              let hd = "Alternatives:"
-                  tl = indent 1 $ do
-                    (_, e) <- toList errs
-                    "Tried:" : indent 1 (go e)
-              in  hd : tl
-            ReasonInfix errs ->
-              let hd = "Infix/split failed:"
-                  tl = indent 1 $ do
-                    (i, _, e) <- toList errs
-                    let x = "Tried position: " <> T.pack (show i)
-                    x : indent 1 (go e)
-              in  hd : tl
+            ReasonNonAssoc prec ->
+              ["Non-associative operator cannot be chained at precedence: " <> T.pack (show prec)]
             ReasonFail msg -> ["User reported failure: " <> msg]
             ReasonLabeled lab e ->
               let hd = "Label: " <> unLabel lab
-                  tl = indent 1 (go e)
-              in  hd : tl
-            ReasonLook e ->
-              let hd = "Error in lookahead:"
                   tl = indent 1 (go e)
               in  hd : tl
             ReasonTakeNone -> ["Took/dropped no elements"]
@@ -1109,7 +1220,7 @@ instance (HasErrMessage e) => HasErrMessage (Err e) where
                 HideErrorYes -> [msg]
       in  pos : body
 
--- | Create 'Errata' formatting a parse error
+-- | Create errata formatting a parse error.
 errataE :: (HasErrMessage e) => FilePath -> (Int -> (E.Line, E.Column)) -> Err e -> [E.Errata]
 errataE fp mkP e =
   let (line, col) = mkP (spanStart (errSpan e))

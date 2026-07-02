@@ -1,11 +1,11 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.37.0.
+-- This file has been generated from package.yaml by hpack version 0.39.1.
 --
 -- see: https://github.com/sol/hpack
 
 name:           looksee-trip
-version:        0.8.0
+version:        1.0.0
 synopsis:       A simple text parser with decent errors
 description:    Please see the README on GitHub at <https://github.com/ejconlon/looksee#readme>
 category:       Parsing
@@ -63,7 +63,7 @@ library
   build-depends:
       base >=4.12 && <5
     , daytripper ==1.0.*
-    , looksee ==0.8.*
+    , looksee ==1.0.*
     , prettyprinter ==1.7.*
     , prop-unit >=1.0.1 && <1.1
     , text >=2.0 && <2.2

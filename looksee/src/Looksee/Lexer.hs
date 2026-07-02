@@ -11,21 +11,19 @@ where
 
 import Control.Monad (void)
 import Data.Text (Text)
-import Looksee (ParserT, altP, breakP, dropAllP, dropWhileP, optP, textP, textP_)
+import Looksee (GuardedCaseT, ParserT, chooseElseP, dropWhileP, guarded, headP, iterP, textP, textP_)
 
 space
   :: (Monad m)
-  => ParserT e m ()
-  -- ^ A parser for space characters which does not accept empty (e.g. 'space1P')
-  -> ParserT e m ()
-  -- ^ A parser for a line comment (e.g. 'skipLineComment')
-  -> ParserT e m ()
-  -- ^ A parser for a block comment (e.g. 'skipBlockComment')
+  => GuardedCaseT e m ()
+  -- ^ A guarded parser for space characters which does not accept empty (e.g. @guarded space1P (pure ())@)
+  -> GuardedCaseT e m ()
+  -- ^ A guarded parser for a line comment (e.g. @guarded (skipLineComment "--") (pure ())@)
+  -> GuardedCaseT e m ()
+  -- ^ A guarded parser for a block comment (e.g. @guarded (skipBlockComment "{-" "-}") (pure ())@)
   -> ParserT e m ()
 space sp line block =
-  let p = optP (altP [sp, line, block])
-      go = p >>= \case Nothing -> pure (); Just _ -> go
-  in  go
+  iterP $ chooseElseP [Nothing <$ sp, Nothing <$ line, Nothing <$ block] (pure (Just ()))
 
 lexeme
   :: ParserT e m ()
@@ -71,4 +69,4 @@ skipBlockComment
   -> ParserT e m ()
 skipBlockComment start end = do
   textP_ start
-  void (breakP end dropAllP)
+  iterP $ chooseElseP [guarded (textP_ end) (pure (Just ()))] (Nothing <$ headP)

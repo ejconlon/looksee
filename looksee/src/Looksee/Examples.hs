@@ -12,27 +12,31 @@ module Looksee.Examples
   )
 where
 
-import Control.Applicative ((<|>))
 import Data.Char (isAlpha)
 import Data.Scientific (Scientific)
 import Data.Sequence (Seq)
 import Data.Text (Text)
 import Data.Void (Void)
 import Looksee
-  ( Parser
-  , altP
-  , betweenP
+  ( Assoc (..)
+  , GuardedCaseT (..)
+  , Parser
+  , chooseP
   , decP
   , doubleStrP
-  , infixRP
-  , intP
-  , labelP
+  , guarded
+  , guardedWith
+  , infixOp
+  , labelG
+  , numP
+  , prattTable
+  , prattWithTable
+  , prefixOp
   , sciP
   , sepByP
   , space1P
   , stripEndP
   , stripP
-  , stripStartP
   , takeWhile1P
   , textP_
   )
@@ -52,25 +56,25 @@ jsonParser :: Parser Void Json
 jsonParser = stripP valP
  where
   valP =
-    altP
-      [ labelP "null" nullP
-      , labelP "bool" boolP
-      , labelP "str" strP
-      , labelP "array" arrayP
-      , labelP "object" objectP
-      , labelP "num" numP
-      ]
-  boolP = JsonBool <$> (False <$ textP_ "false" <|> True <$ textP_ "true")
-  numP = JsonNum <$> sciP
-  nullP = JsonNull <$ textP_ "null"
-  strP = JsonString <$> doubleStrP
-  arrayP = JsonArray <$> betweenP (stripEndP (textP_ "[")) (textP_ "]") (sepByP (stripEndP (textP_ ",")) (stripEndP valP))
-  pairP = do
-    s <- doubleStrP
+    chooseP valCases
+  valCases =
+    [ labelG "null" (guarded (textP_ "null") (pure JsonNull))
+    , labelG "false" (guarded (textP_ "false") (pure (JsonBool False)))
+    , labelG "true" (guarded (textP_ "true") (pure (JsonBool True)))
+    , labelG "str" (guardedWith doubleStrP (pure . JsonString))
+    , labelG "array" (guarded (stripEndP (textP_ "[")) arrayBodyP)
+    , labelG "object" (guarded (stripEndP (textP_ "{")) objectBodyP)
+    , labelG "num" (guardedWith sciP (pure . JsonNum))
+    ]
+  valItemCases = fmap stripCase valCases
+  stripCase (GuardedCaseT guard parser) = GuardedCaseT guard (stripEndP . parser)
+  commaP = guarded (stripEndP (textP_ ",")) (pure ())
+  arrayBodyP = JsonArray <$> sepByP commaP valItemCases <* textP_ "]"
+  pairCase = guardedWith doubleStrP $ \s -> do
     stripP (textP_ ":")
-    v <- valP
+    v <- stripEndP valP
     pure (s, v)
-  objectP = JsonObject <$> betweenP (stripEndP (textP_ "{")) (textP_ "}") (sepByP (stripEndP (textP_ ",")) (stripEndP pairP))
+  objectBodyP = JsonObject <$> sepByP commaP [pairCase] <* textP_ "}"
 
 -- | An arithmetic expression
 data Arith
@@ -87,17 +91,19 @@ arithParser :: Parser Void Arith
 arithParser = stripP rootP
  where
   identP = takeWhile1P isAlpha
-  binaryP op f = fmap (uncurry f) (infixRP op (stripEndP rootP) (stripStartP rootP))
-  unaryP op f = textP_ op *> fmap f rootP
-  rootP =
-    altP
-      [ labelP "add" (binaryP "+" ArithAdd)
-      , labelP "sub" (binaryP "-" ArithSub)
-      , labelP "mul" (binaryP "*" ArithMul)
-      , labelP "neg" (unaryP "-" ArithNeg)
-      , labelP "paren" (betweenP (stripEndP (textP_ "(")) (textP_ ")") (stripEndP rootP))
-      , labelP "num" (ArithNum <$> decP)
-      , labelP "var" (ArithVar <$> identP)
+  rootP = prattWithTable opTable atomP
+  opTable = prattTable ops
+  ops =
+    [ prefixOp 30 (stripEndP (textP_ "-")) ArithNeg
+    , infixOp AssocLeft 20 (stripP (textP_ "*")) ArithMul
+    , infixOp AssocLeft 10 (stripP (textP_ "+")) ArithAdd
+    , infixOp AssocLeft 10 (stripP (textP_ "-")) ArithSub
+    ]
+  atomP =
+    chooseP
+      [ labelG "paren" (guarded (stripEndP (textP_ "(")) (stripEndP rootP <* textP_ ")"))
+      , labelG "num" (guardedWith decP (pure . ArithNum))
+      , labelG "var" (guardedWith identP (pure . ArithVar))
       ]
 
 -- | Leaves of S-expression trees
@@ -119,16 +125,15 @@ sexpParser :: Parser Void Sexp
 sexpParser = stripP rootP
  where
   identP = takeWhile1P isAlpha
-  atomP =
-    altP
-      [ labelP "ident" (AtomIdent <$> identP)
-      , labelP "string" (AtomString <$> doubleStrP)
-      , labelP "int" (AtomInt <$> intP)
-      , labelP "sci" (AtomSci <$> sciP)
-      ]
-  listP = betweenP (stripEndP (textP_ "(")) (textP_ ")") (stripEndP (sepByP space1P rootP))
+  numAtomP = either AtomInt AtomSci <$> numP
+  atomCases =
+    [ labelG "string" (guardedWith doubleStrP (pure . AtomString))
+    , labelG "num" (guardedWith numAtomP (pure . id))
+    , labelG "ident" (guardedWith identP (pure . AtomIdent))
+    ]
+  spaceCase = guarded space1P (pure ())
+  listP = SexpList <$> stripEndP (sepByP spaceCase rootCases) <* textP_ ")"
   rootP =
-    altP
-      [ labelP "atom" (SexpAtom <$> atomP)
-      , labelP "list" (SexpList <$> listP)
-      ]
+    chooseP rootCases
+  rootCases =
+    labelG "list" (guarded (stripEndP (textP_ "(")) listP) : fmap (labelG "atom" . fmap SexpAtom) atomCases
