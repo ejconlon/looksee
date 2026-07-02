@@ -8,10 +8,11 @@ where
 
 import Control.Monad (void)
 import Data.Foldable (toList)
+import Data.Sequence (Seq (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void)
-import Looksee hiding (Parser)
+import Looksee hiding (Parser, eolP)
 import Looksee qualified as L
 import Test.Looksee.Scala.Syntax
 
@@ -21,7 +22,13 @@ expr :: Parser Expr
 expr = spaceP *> expression <* endP
 
 program :: Parser [Stmt]
-program = spaceP *> chooseElseP [guarded (symbol_ "{") compactProgramBody] (manySep stmt semiOrNl) <* spaceP <* endP
+program =
+  spaceP
+    *> chooseElseP
+      [guarded (symbol_ "{") compactProgramBody]
+      (toList <$> sepByP (guarded semiOrNl (pure ())) [guardedWith stmt pure])
+    <* spaceP
+    <* endP
 
 expression :: Parser Expr
 expression = prattWithTable exprTable atom
@@ -45,9 +52,9 @@ exprFormBranches =
   , guarded (symbol_ "for") forExprBody
   , guarded (symbol_ "match") matchExprBody
   , guarded (symbol_ "{") braceExprBody
-  , guarded (symbol_ "[") (Lines <$> endBy expression (void (charP '\n')) (symbol "]"))
+  , guarded (symbol_ "[") (Lines . toList <$> delimByP (pure ()) (symbol "]") (void (charP '\n')) expression)
   , guarded (symbol_ "(") parenExprBody
-  , guardedWith (lexeme constructorName <* symbol_ "(") (\name -> Call name <$> delimRest (symbol ")") comma arg)
+  , guardedWith (lexeme constructorName) (\name -> Call name . toList <$> delimByP (symbol_ "(") (symbol ")") comma arg)
   ]
 
 ifExprBody :: Parser Expr
@@ -66,7 +73,7 @@ whileExprBody = do
 
 forExprBody :: Parser Expr
 forExprBody = do
-  clauses <- chooseP [guarded (symbol_ "{") (endBy forClause semi (symbol "}"))]
+  clauses <- toList <$> delimEndByP (symbol_ "{") (symbol "}") semi forClause
   symbol_ "yield"
   For clauses <$> expression
 
@@ -82,7 +89,7 @@ braceExprBody =
   chooseP
     [ guarded (symbol_ "val") compactBlockBodyAfterFirstVal
     , guardedWith (lexeme identifier <* assign) recordAfterFirstField
-    , guardedWith expression (\first -> List . (first :) <$> manyAfter comma expression (symbol "}"))
+    , guardedWith expression (\first -> List . (first :) . toList <$> delimEndTailP comma (symbol "}") expression)
     , guarded (symbol_ "}") (pure (List []))
     ]
 
@@ -131,7 +138,7 @@ recordAfterFirstField name = do
 
 parenExprBody :: Parser Expr
 parenExprBody = do
-  values <- delimRest (symbol ")") comma expression
+  values <- toList <$> delimByP (pure ()) (symbol ")") comma expression
   chooseElseP [guarded (symbol_ "=>") (Lam (tupleParams values) <$> expression)] (pure (singletonOr Tuple values))
  where
   tupleParams =
@@ -144,7 +151,7 @@ parenExprBody = do
 matchExprBody :: Parser Expr
 matchExprBody = do
   scrutinee <- expression
-  cases <- chooseP [guarded (symbol_ "{") (endBy matchCase semi (symbol "}"))]
+  cases <- toList <$> delimEndByP (symbol_ "{") (symbol "}") semi matchCase
   pure (Match scrutinee cases)
 
 matchCase :: Parser (Pattern, Maybe Expr, Expr)
@@ -166,8 +173,8 @@ patternAtom =
   chooseP
     [ guardedWith
         (lexeme constructorName)
-        (\name -> PConstructor name <$> optionalDelim (symbol_ "(") (symbol ")") comma patternP)
-    , guarded (symbol_ "(") (singletonOr PTuple <$> delimRest (symbol ")") comma patternP)
+        (\name -> PConstructor name . toList <$> maybeDelimByP (symbol_ "(") (symbol ")") comma patternP)
+    , guarded (symbol_ "(") (singletonOrP (PTuple . toList) (delimByP (pure ()) (symbol ")") comma patternP))
     , guarded (symbol_ "_") (pure PWildcard)
     , guardedWith (lexeme number) (pure . PLit)
     , guardedWith (lexeme identifier) (pure . PVar)
@@ -181,7 +188,7 @@ exprOperators :: [Op Void Expr]
 exprOperators =
   [ prefixOp 7 (symbol_ "-") Neg
   , postfixOpWith 11 (symbol ".") (const (flip Select <$> lexeme identifier))
-  , postfixOpWith 10 (symbol "(") (const (flip Apply <$> delimRest (symbol ")") comma arg))
+  , postfixOpWith 10 (symbol "(") (const (flip Apply . toList <$> delimByP (pure ()) (symbol ")") comma arg))
   , postfixOp 9 (symbol_ "!") Fact
   , postfixOpWith 9 (symbol_ ":" *> lexeme constructorName) (\ty -> pure (`Ascribe` ty))
   , infixOp AssocRight 8 (symbol_ "^") Pow
@@ -206,14 +213,14 @@ stmtCases =
   ]
 
 compactProgramBody :: Parser [Stmt]
-compactProgramBody = endBy stmt semi (symbol "}")
+compactProgramBody = toList <$> delimEndByP (pure ()) (symbol "}") semi stmt
 
 dataStmtBody :: Parser Stmt
 dataStmtBody = do
   name <- lexeme constructorName
   params <-
     chooseElseP
-      [guarded (symbol_ "[") (delimRest (symbol "]") comma typeParam)]
+      [guarded (symbol_ "[") (toList <$> delimByP (pure ()) (symbol "]") comma typeParam)]
       (manyGuarded (guardedWith (lexeme identifier) pure))
   symbol_ "="
   variants <-
@@ -225,7 +232,7 @@ dataStmtBody = do
 variant :: Parser (Text, [Text])
 variant = do
   name <- lexeme constructorName
-  fields <- optionalDelim (symbol_ "(") (symbol ")") comma (lexeme identifier)
+  fields <- toList <$> maybeDelimByP (symbol_ "(") (symbol ")") comma (lexeme identifier)
   pure (name, fields)
 
 optionalPipe :: Parser ()
@@ -241,7 +248,7 @@ valStmtBody = do
 defStmtBody :: Parser Stmt
 defStmtBody = do
   name <- lexeme identifier
-  tyParams <- chooseElseP [guarded (symbol_ "[") (delimRest (symbol "]") comma typeParam)] (pure [])
+  tyParams <- chooseElseP [guarded (symbol_ "[") (toList <$> delimByP (pure ()) (symbol "]") comma typeParam)] (pure [])
   params <- paramList
   usingParams <- chooseElseP [guarded (symbol_ "(") usingClauseBody] (pure [])
   ret <- optionalAfter (symbol_ ":") typeRef
@@ -275,7 +282,7 @@ extensionStmtBody = do
     pure (name, ty)
   body <-
     chooseP
-      [ guarded (symbol_ "{") (endBy (symbol_ "def" *> defStmtBody) semi (symbol "}"))
+      [ guarded (symbol_ "{") (toList <$> delimEndByP (pure ()) (symbol "}") semi (symbol_ "def" *> defStmtBody))
       , guarded eolP (toList <$> indentBlockP scalaIndent (symbol_ "def" *> defStmtBody <* optionalEol))
       ]
   pure (Extension name ty body)
@@ -297,7 +304,7 @@ typeApp =
   chooseP
     [ guarded (symbol_ "(") (("(" <>) . (<> ")") <$> typeRef <* symbol_ ")")
     , guardedWith (lexeme constructorName) $ \name -> do
-        args <- optionalDelim (symbol_ "[") (symbol "]") comma typeRef
+        args <- toList <$> maybeDelimByP (symbol_ "[") (symbol "]") comma typeRef
         pure $ if null args then name else name <> "[" <> T.intercalate ", " args <> "]"
     ]
 
@@ -308,10 +315,10 @@ typeParam = do
   pure (maybe name (`T.cons` name) variance)
 
 paramList :: Parser [Param]
-paramList = parensBy comma param
+paramList = toList <$> delimByP (symbol_ "(") (symbol ")") comma param
 
 usingClauseBody :: Parser [Param]
-usingClauseBody = symbol_ "using" *> delimRest (symbol ")") comma param
+usingClauseBody = symbol_ "using" *> (toList <$> delimByP (pure ()) (symbol ")") comma param)
 
 param :: Parser Param
 param = do
@@ -365,50 +372,21 @@ optionalAfter guard parser = chooseElseP [guardedWith guard (const (Just <$> par
 manyGuarded :: GuardedCase Void a -> Parser [a]
 manyGuarded branch = toList <$> repeatP branch
 
-manyAfter :: Parser sep -> Parser a -> Parser end -> Parser [a]
-manyAfter sep item end =
-  chooseP
-    [ guarded (void end) (pure [])
-    , guarded (void sep) (chooseP [guarded (void end) (pure []), guardedWith item (\x -> (x :) <$> manyAfter sep item end)])
-    ]
-
 sepBy1 :: Parser a -> Parser sep -> Parser [a]
 sepBy1 item sep = do
   first <- item
   rest <- chooseElseP [guarded (void sep) (sepBy1 item sep)] (pure [])
   pure (first : rest)
 
-manySep :: Parser a -> Parser sep -> Parser [a]
-manySep item sep =
-  chooseElseP [guardedWith item (\x -> (x :) <$> chooseElseP [guarded (void sep) (manySep item sep)] (pure []))] (pure [])
-
-endBy :: Parser a -> Parser sep -> Parser end -> Parser [a]
-endBy item sep end =
-  chooseP
-    [ guarded (void end) (pure [])
-    , guardedWith item (\x -> (x :) <$> chooseP [guarded (void end) (pure []), guarded (void sep) (endBy item sep end)])
-    ]
-
-delimRest :: Parser close -> Parser sep -> Parser a -> Parser [a]
-delimRest close sep item =
-  chooseP
-    [ guarded (void close) (pure [])
-    , guardedWith
-        item
-        (\x -> (x :) <$> chooseP [guarded (void close) (pure []), guarded (void sep) (delimRest close sep item)])
-    ]
-
-optionalDelim :: Parser open -> Parser close -> Parser sep -> Parser a -> Parser [a]
-optionalDelim open close sep item = chooseElseP [guarded (void open) (delimRest close sep item)] (pure [])
-
 parens :: Parser a -> Parser a
 parens parser = symbol_ "(" *> parser <* symbol_ ")"
 
-parensBy :: Parser sep -> Parser a -> Parser [a]
-parensBy sep item = symbol_ "(" *> delimRest (symbol ")") sep item
-
-bracesEndBy :: Parser sep -> Parser a -> Parser [a]
-bracesEndBy sep item = symbol_ "{" *> endBy item sep (symbol "}")
+delimEndTailP :: Parser sep -> Parser close -> Parser a -> Parser (Seq a)
+delimEndTailP sep close item =
+  chooseP
+    [ guarded (void close) (pure Empty)
+    , guarded (void sep) (chooseElseP [guarded (void close) (pure Empty)] ((:<|) <$> item <*> delimEndTailP sep close item))
+    ]
 
 layoutBody :: Parser a -> Parser a
 layoutBody = indentedOrInlineP eolP scalaIndent

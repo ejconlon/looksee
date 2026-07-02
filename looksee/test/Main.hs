@@ -14,6 +14,7 @@ import Data.Text qualified as T
 import Data.Void (Void)
 import Looksee
 import Looksee.Examples
+import Looksee.Lexer qualified as Lex
 import Test.Looksee.Scala.Parse qualified as Scala
 import Test.Looksee.Scala.Syntax qualified as Scala
 import Test.Tasty (TestName, TestTree, defaultMain, testGroup)
@@ -55,8 +56,10 @@ testBasic =
     "basic"
     [ testParserCase (ParserCase "text" (textP "hi") "hi" (Right "hi"))
     , testCase "textSpan" $ textSpan "a\nb" @?= Span (Pos 0 0 0) (Pos 3 1 1)
+    , testParserCase (ParserCase "string" (stringP "hi") "hi" (Right "hi"))
     , testParserCase (ParserCase "text_" (textP_ "hi") "hi" (Right ()))
     , testParserCase (ParserCase "end" endP "" (Right ()))
+    , testParserCase (ParserCase "eof" eofP "" (Right ()))
     , testParserCase (ParserCase "takeWhile1" (takeWhile1P (== 'x')) "xxx" (Right "xxx"))
     , testParserCase (ParserCase "takeWhile" (takeWhileP (== 'x')) "xx" (Right "xx"))
     , testParserCase (ParserCase "dropWhile" (dropWhileP (== 'x')) "xx" (Right 2))
@@ -66,6 +69,7 @@ testBasic =
     , testParserCase (ParserCase "takeExact" (takeExactP 2) "ab" (Right "ab"))
     , testParserCase (ParserCase "dropExact" (dropExactP 2) "ab" (Right ()))
     , testParserCase (ParserCase "takeAll" takeAllP "abc" (Right "abc"))
+    , testParserCase (ParserCase "rest" restP "abc" (Right "abc"))
     , testParserCase (ParserCase "dropAll" dropAllP "abc" (Right 3))
     , testParserCase (ParserCase "takeAll1" takeAll1P "abc" (Right "abc"))
     , testParserCase (ParserCase "dropAll1" dropAll1P "abc" (Right 3))
@@ -75,6 +79,13 @@ testBasic =
     , testParserCase (ParserCase "someChar_" (someCharP_ ("abc" :: String)) "c" (Right ()))
     , testParserCase (ParserCase "uncons" unconsP "x" (Right (Just 'x')))
     , testParserCase (ParserCase "head" headP "x" (Right 'x'))
+    , testParserCase (ParserCase "any" anyP "x" (Right 'x'))
+    , testParserCase (ParserCase "satisfy" (satisfyP (== 'x')) "x" (Right 'x'))
+    , testParserCase (ParserCase "digit" digitP "1" (Right '1'))
+    , testParserCase (ParserCase "letter" letterP "a" (Right 'a'))
+    , testParserCase (ParserCase "upper" upperP "A" (Right 'A'))
+    , testParserCase (ParserCase "alphaNum" alphaNumP "1" (Right '1'))
+    , testParserCase (ParserCase "noneOf" (noneOfP ("abc" :: String)) "x" (Right 'x'))
     ]
 
 testChoose :: TestTree
@@ -115,8 +126,58 @@ testCombinators =
     [ testParserCase (ParserCase "between" (betweenP (charP_ '(') (charP_ ')') (textP "x")) "(x)" (Right "x"))
     , testParserCase (ParserCase "optional some" (optionalP (guardedWith (charP 'x') pure)) "x" (Right (Just 'x')))
     , testParserCase (ParserCase "optional none" (optionalP (guardedWith (charP 'x') pure)) "" (Right Nothing))
+    , testParserCase (ParserCase "commit" (commitP (guarded (charP_ 'x') (textP "y"))) "xy" (Right "y"))
+    , testParserCase (ParserCase "commit else" (commitElseP (guarded (charP_ 'x') (textP "y")) (textP "z")) "z" (Right "z"))
     , testParserCase (ParserCase "measure" (measureP (textP "abc")) "abc" (Right ("abc", 3)))
     , testParserCase (ParserCase "iter" iterExample "xxx!" (Right 3))
+    , testParserCase
+        (ParserCase "delim" (delimP (Delims (charP_ '[') (charP_ ']')) Nothing (charP 'x')) "[xx]" (Right (Seq.fromList "xx")))
+    , testParserCase
+        (ParserCase "delim by" (delimByP (charP_ '[') (charP_ ']') (charP_ ',') (charP 'x')) "[x,x]" (Right (Seq.fromList "xx")))
+    , testParserCase
+        ( ParserCase
+            "delim end by"
+            (delimEndByP (charP_ '[') (charP_ ']') (charP_ ',') (charP 'x'))
+            "[x,x,]"
+            (Right (Seq.fromList "xx"))
+        )
+    , testParserCase
+        (ParserCase "maybe delim none" (maybeDelimByP (charP_ '[') (charP_ ']') (charP_ ',') (charP 'x')) "" (Right Seq.empty))
+    , testParserCase
+        ( ParserCase
+            "maybe delim some"
+            (maybeDelimByP (charP_ '[') (charP_ ']') (charP_ ',') (charP 'x'))
+            "[x,x]"
+            (Right (Seq.fromList "xx"))
+        )
+    , testParserCase
+        ( ParserCase
+            "maybe delim end"
+            (maybeDelimEndByP (charP_ '[') (charP_ ']') (charP_ ',') (charP 'x'))
+            "[x,]"
+            (Right (Seq.singleton 'x'))
+        )
+    , testParserCase
+        ( ParserCase
+            "prefix end by"
+            (prefixEndByP (charP_ '>') (charP 'x') (charP_ '\n') (textP "done"))
+            ">x\n>x\ndone"
+            (Right (Seq.fromList "xx", "done"))
+        )
+    , testParserCase
+        ( ParserCase
+            "singletonOrP singleton"
+            (singletonOrP (const 'z') (pure (Seq.singleton 'x') :: TestParser (Seq.Seq Char)))
+            ""
+            (Right 'x')
+        )
+    , testParserCase
+        ( ParserCase
+            "singletonOrP grouped"
+            (singletonOrP (const 'z') (pure (Seq.fromList "xy") :: TestParser (Seq.Seq Char)))
+            ""
+            (Right 'z')
+        )
     ]
  where
   iterExample = scopeP (0 :: Int) $ iterP $ do
@@ -173,6 +234,10 @@ testWhitespace =
   testGroup
     "whitespace"
     [ testParserCase (ParserCase "space" (spaceP *> textP "x") " \n\tx" (Right "x"))
+    , testParserCase (ParserCase "hspace" (hspaceP *> textP "x") " \tx" (Right "x"))
+    , testParserCase (ParserCase "hspace1" (hspace1P *> textP "x") " \tx" (Right "x"))
+    , testParserCase (ParserCase "eol crlf" eolP "\r\n" (Right "\r\n"))
+    , testParserCase (ParserCase "eol lf" eolP "\n" (Right "\n"))
     , testParserCase (ParserCase "strip" (stripP (textP "x")) " x " (Right "x"))
     , testParserCase (ParserCase "stripStart" (stripStartP (textP "x")) " x" (Right "x"))
     , testParserCase (ParserCase "stripEnd" (stripEndP (textP "x")) "x " (Right "x"))
@@ -180,6 +245,9 @@ testWhitespace =
     , testParserCase (ParserCase "strip1" (strip1P (textP "x")) " x " (Right "x"))
     , testParserCase (ParserCase "stripStart1" (stripStart1P (textP "x")) " x" (Right "x"))
     , testParserCase (ParserCase "stripEnd1" (stripEnd1P (textP "x")) "x " (Right "x"))
+    , testParserCase
+        (ParserCase "line comment" (Lex.skipLineComment "--" *> charP_ '\n' *> textP "x") "-- comment\nx" (Right "x"))
+    , testParserCase (ParserCase "block comment" (Lex.skipBlockComment "{-" "-}" *> textP "x") "{- comment -}x" (Right "x"))
     ]
 
 testErrorsAndTransforms :: TestTree

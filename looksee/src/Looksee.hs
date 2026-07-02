@@ -26,6 +26,17 @@ module Looksee
   , labelG
   , chooseP
   , chooseElseP
+  , commitP
+  , commitElseP
+  , Delims (..)
+  , Sep (..)
+  , delimP
+  , delimByP
+  , delimEndByP
+  , maybeDelimByP
+  , maybeDelimEndByP
+  , prefixEndByP
+  , singletonOrP
   , Op
   , pattern OpPrefix
   , pattern OpPostfix
@@ -60,12 +71,21 @@ module Looksee
   , spanAroundP
   , throwP
   , explainP
+  , anyP
+  , satisfyP
   , endP
+  , eofP
   , labelP
   , textP
   , textP_
+  , stringP
   , charP
   , charP_
+  , digitP
+  , letterP
+  , upperP
+  , alphaNumP
+  , noneOfP
   , someCharP
   , someCharP_
   , takeP
@@ -77,6 +97,7 @@ module Looksee
   , takeWhile1P
   , dropWhile1P
   , takeAllP
+  , restP
   , dropAllP
   , takeAll1P
   , dropAll1P
@@ -88,6 +109,9 @@ module Looksee
   , sepBy1P
   , sepBy2P
   , spaceP
+  , hspaceP
+  , hspace1P
+  , eolP
   , stripP
   , stripStartP
   , stripEndP
@@ -142,7 +166,7 @@ import Data.Bifoldable (Bifoldable (..))
 import Data.Bifunctor (Bifunctor (..))
 import Data.Bifunctor.TH (deriveBifoldable, deriveBifunctor, deriveBitraversable)
 import Data.Bitraversable (Bitraversable (..))
-import Data.Char (digitToInt, isDigit, isSpace)
+import Data.Char (digitToInt, isAlphaNum, isDigit, isLetter, isSpace, isUpper)
 import Data.Foldable (toList)
 import Data.Functor.Foldable (Base, Corecursive (..), Recursive (..))
 import Data.Hashable (Hashable)
@@ -411,6 +435,22 @@ pattern GuardedCase guard parser = GuardedCaseT guard parser
 instance Functor (GuardedCaseT e m) where
   fmap f (GuardedCaseT guard parser) = GuardedCaseT guard (fmap f . parser)
 
+-- | Parsers for an opening and closing delimiter.
+data Delims e m = Delims
+  { delimOpen :: !(ParserT e m ())
+  -- ^ Parser for the opening delimiter.
+  , delimClose :: !(ParserT e m ())
+  -- ^ Parser for the closing delimiter.
+  }
+
+-- | Parser for a separator between productions.
+data Sep e m = Sep
+  { sepParser :: !(ParserT e m ())
+  -- ^ Parser for an item separator.
+  , sepTrailing :: !Bool
+  -- ^ Whether a trailing separator may appear without a following item.
+  }
+
 -- | A user-defined prefix production.
 type PrefixOp e = PrefixOpT e Identity
 
@@ -632,6 +672,29 @@ endP = do
     then pure ()
     else errP (ReasonLeftover l)
 
+-- | Succeed if this is the end of input. Synonym for 'endP'.
+eofP :: (Monad m) => ParserT e m ()
+eofP = endP
+
+-- | Parse any single character.
+anyP :: (Monad m) => ParserT e m Char
+anyP = headP
+
+-- | Parse a single character satisfying the supplied predicate.
+satisfyP :: (Monad m) => (Char -> Bool) -> ParserT e m Char
+satisfyP predicate = do
+  mc <- stateP $ \st ->
+    case T.uncons (stHay st) of
+      Nothing -> (Nothing, st)
+      Just (c, h') ->
+        if predicate c
+          then
+            let r' = advanceStart 1 st
+                st' = st {stHay = h', stSpan = r'}
+            in  (Just c, st')
+          else (Nothing, st)
+  maybe (errP ReasonTakeNone) pure mc
+
 -- private
 guardP :: (Monad m) => ParserT e m a -> ParserT e m (Maybe a)
 guardP (ParserT g) = ParserT $ \j -> do
@@ -687,6 +750,18 @@ chooseElseP branches fallback = go (toList branches)
       Nothing -> go rest
       Just x -> parser x
 
+-- | Commit to a single guarded branch.
+--
+-- This is a readability synonym for @chooseP [branch]@.
+commitP :: (Monad m) => GuardedCaseT e m a -> ParserT e m a
+commitP branch = chooseP [branch]
+
+-- | Commit to a single guarded branch, otherwise parse a fallback.
+--
+-- This is a readability synonym for @chooseElseP [branch] fallback@.
+commitElseP :: (Monad m) => GuardedCaseT e m a -> ParserT e m a -> ParserT e m a
+commitElseP branch = chooseElseP [branch]
+
 -- | Labels parse errors
 labelP :: (Monad m) => Label -> ParserT e m a -> ParserT e m a
 labelP lab (ParserT g) = ParserT $ \j ->
@@ -706,6 +781,10 @@ textP n = do
 textP_ :: (Monad m) => Text -> ParserT e m ()
 textP_ = void . textP
 
+-- | Expect the given text at the start of the range. Synonym for 'textP'.
+stringP :: (Monad m) => Text -> ParserT e m Text
+stringP = textP
+
 -- | Expect the given character at the start of the range
 charP :: (Monad m) => Char -> ParserT e m Char
 charP = fmap T.head . textP . T.singleton
@@ -713,6 +792,28 @@ charP = fmap T.head . textP . T.singleton
 -- | Expect the given character at the start of the range, discarding the matched character.
 charP_ :: (Monad m) => Char -> ParserT e m ()
 charP_ = void . charP
+
+-- | Parse a decimal digit.
+digitP :: (Monad m) => ParserT e m Char
+digitP = satisfyP isDigit
+
+-- | Parse a letter.
+letterP :: (Monad m) => ParserT e m Char
+letterP = satisfyP isLetter
+
+-- | Parse an uppercase letter.
+upperP :: (Monad m) => ParserT e m Char
+upperP = satisfyP isUpper
+
+-- | Parse an alphanumeric character.
+alphaNumP :: (Monad m) => ParserT e m Char
+alphaNumP = satisfyP isAlphaNum
+
+-- | Parse a character not in the supplied collection.
+noneOfP :: (Monad m, Foldable f) => f Char -> ParserT e m Char
+noneOfP chars0 = do
+  let chars = toList chars0
+  satisfyP (`notElem` chars)
 
 -- | Expect one of the given characters at the start of the range.
 someCharP :: (Monad m, Foldable f) => f Char -> ParserT e m Char
@@ -951,6 +1052,10 @@ takeAllP = stateP $ \st ->
       st' = st {stHay = T.empty, stSpan = r'}
   in  (T.copy h, st')
 
+-- | Take the remaining range, leaving it empty. Synonym for 'takeAllP'.
+restP :: (Monad m) => ParserT e m Text
+restP = takeAllP
+
 -- | Like 'takeAllP' but ensures at least 1 character has been taken
 takeAll1P :: (Monad m) => ParserT e m Text
 takeAll1P = do
@@ -1083,9 +1188,103 @@ sepBy2P sepBranch itemBranch = do
   a1 <- chooseP itemBranch
   sepByTailP sepBranch itemBranch (Empty :|> a0 :|> a1)
 
+-- | Parse a delimited sequence, such as braces, parentheses, or brackets.
+delimP :: (Monad m) => Delims e m -> Maybe (Sep e m) -> ParserT e m a -> ParserT e m (Seq a)
+delimP delimiters = delimWithP (delimOpen delimiters) (delimClose delimiters)
+
+-- | Parse a delimited sequence with separators and no trailing separator.
+delimByP
+  :: (Monad m) => ParserT e m open -> ParserT e m close -> ParserT e m sep -> ParserT e m a -> ParserT e m (Seq a)
+delimByP open close separator =
+  delimWithP (void open) (void close) (Just (Sep (void separator) False))
+
+-- | Parse a delimited sequence with separators and an optional trailing separator.
+delimEndByP
+  :: (Monad m) => ParserT e m open -> ParserT e m close -> ParserT e m sep -> ParserT e m a -> ParserT e m (Seq a)
+delimEndByP open close separator =
+  delimWithP (void open) (void close) (Just (Sep (void separator) True))
+
+-- | Optionally parse a delimited sequence with separators and no trailing separator.
+maybeDelimByP
+  :: (Monad m) => ParserT e m open -> ParserT e m close -> ParserT e m sep -> ParserT e m a -> ParserT e m (Seq a)
+maybeDelimByP open close separator item =
+  chooseElseP [guarded (void open) (delimInsideP (void close) (Just (Sep (void separator) False)) item)] (pure Empty)
+
+-- | Optionally parse a delimited sequence with separators and an optional trailing separator.
+maybeDelimEndByP
+  :: (Monad m) => ParserT e m open -> ParserT e m close -> ParserT e m sep -> ParserT e m a -> ParserT e m (Seq a)
+maybeDelimEndByP open close separator item =
+  chooseElseP [guarded (void open) (delimInsideP (void close) (Just (Sep (void separator) True)) item)] (pure Empty)
+
+-- | Parse prefixed repeated items until a final parser succeeds.
+prefixEndByP
+  :: (Monad m) => ParserT e m () -> ParserT e m a -> ParserT e m sep -> ParserT e m b -> ParserT e m (Seq a, b)
+prefixEndByP ahead item separator final = do
+  items <- go Empty
+  result <- final
+  pure (items, result)
+ where
+  go items = chooseElseP [guarded ahead (nextItem items)] (pure items)
+
+  nextItem items = do
+    value <- item <* separator
+    go (items :|> value)
+
+-- | Collapse a singleton foldable result or apply a grouping constructor.
+singletonOrP :: (Foldable f, Functor g) => (Seq a -> a) -> g (f a) -> g a
+singletonOrP grouped parser = collapse <$> parser
+ where
+  collapse values = case toList values of
+    [value] -> value
+    _ -> grouped (foldl (:|>) Empty values)
+
+-- private
+delimWithP :: (Monad m) => ParserT e m () -> ParserT e m () -> Maybe (Sep e m) -> ParserT e m a -> ParserT e m (Seq a)
+delimWithP open close separator item =
+  commitP (guarded open (delimInsideP close separator item))
+
+-- private
+delimInsideP :: (Monad m) => ParserT e m () -> Maybe (Sep e m) -> ParserT e m a -> ParserT e m (Seq a)
+delimInsideP close separator item =
+  chooseElseP [guarded close (pure Empty)] (item >>= go . Seq.singleton)
+ where
+  go items = case separator of
+    Nothing ->
+      chooseElseP
+        [guarded close (pure items)]
+        ( do
+            value <- item
+            go (items :|> value)
+        )
+    Just sep ->
+      chooseP
+        [ guarded close (pure items)
+        , guarded (sepParser sep) (afterSeparator items sep)
+        ]
+
+  afterSeparator items sep
+    | sepTrailing sep = chooseElseP [guarded close (pure items)] (item >>= go . (items :|>))
+    | otherwise = item >>= go . (items :|>)
+
 -- | Consumes many spaces at the start of the range
 spaceP :: (Monad m) => ParserT e m ()
 spaceP = void (dropWhileP isSpace)
+
+-- | Consume horizontal space at the start of the range.
+hspaceP :: (Monad m) => ParserT e m ()
+hspaceP = void (dropWhileP isHorizontalSpace)
+
+-- | Consume at least one horizontal space at the start of the range.
+hspace1P :: (Monad m) => ParserT e m ()
+hspace1P = void (dropWhile1P isHorizontalSpace)
+
+-- | Parse an end-of-line sequence.
+eolP :: (Monad m) => ParserT e m Text
+eolP = chooseP [guarded (textP_ "\r\n") (pure "\r\n"), guarded (textP_ "\n") (pure "\n")]
+
+-- private
+isHorizontalSpace :: Char -> Bool
+isHorizontalSpace c = c == ' ' || c == '\t'
 
 -- | Strips spaces before and after parsing
 stripP :: (Monad m) => ParserT e m a -> ParserT e m a
